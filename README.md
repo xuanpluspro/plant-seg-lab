@@ -49,7 +49,8 @@ git clone https://github.com/xuanpluspro/plant-seg-lab.git
 cd plant-seg-lab
 pip install -r requirements.txt
 python check_data.py --data-path data/VegAnn
-python train_medical.py --data-path data/VegAnn --from-scratch --epochs 30 --batch-size 2 --workers 4 --output run/train/adpm_dynamic
+python download_pretrained.py
+python train_medical.py --data-path data/VegAnn --epochs 30 --batch-size 2 --workers 4 --output run/train/adpm_dynamic
 ```
 
 先以batch-size=2检查真实GPU显存，再提高批大小；尚未验证32GB GPU能承受的最大批大小。
@@ -94,7 +95,7 @@ python check_data.py --data-path VOCdevkit
 
 ResNet-50是骨干结构；加载已有权重后才是预训练骨干。原OSSDet配置也使用ResNet-50并指定本地预训练文件。本工程接受本地 **torchvision RGB ResNet-50 ImageNet state_dict**，严格检查键和尺寸，只忽略fc分类器；不自动联网下载。
 
-将权重放在 model/weights/resnet50.pth（该目录及二进制权重未打包），或传任意绝对路径。原U-Net权重、八波段OSSDet检测权重不能直接用。不会在载入后执行旧模板的全模型weights_init。默认冻结骨干BatchNorm运行统计，卷积等参数仍全量训练；--no-freeze-backbone-bn可启用BN统计更新。
+默认权重位置为 `pretrained/resnet50.pth`。运行 `python download_pretrained.py` 下载官方 torchvision ResNet-50 ImageNet-1K V2 权重（验证SHA256前缀）；文件不提交Git。也可通过 `--backbone-weights` 指定其他兼容本地权重。训练默认加载此文件，缺少文件会报错，不会自动改为随机初始化。原U-Net权重、八波段OSSDet检测权重不能直接用。不会在载入后执行旧模板的全模型weights_init。默认冻结骨干BatchNorm运行统计，卷积等参数仍全量训练；--no-freeze-backbone-bn可启用BN统计更新。
 
 ## 训练与恢复
 
@@ -202,3 +203,15 @@ python benchmark.py --weights run/train/riceseg_adpm_dynamic/best.pth --device c
 
 训练可用 `--benchmark-warmup 50 --benchmark-iterations 200` 调整次数；
 `--no-benchmark` 可关闭训练末尾的自动统计，之后再单独执行benchmark.py。
+
+## 默认使用预训练骨干（AutoDL）
+
+```bash
+cd /root/autodl-tmp/plant-seg-lab && git pull && python download_pretrained.py
+python train_medical.py --data-path data/VOC2012 --epochs 30 --batch-size 32 --workers 4 --device cuda --amp --output run/train/riceseg_pretrained_bs32_ep30
+```
+
+预训练仅初始化ResNet-50，两个新模块和分割头没有对应预训练权重，需训练。
+当前默认冻结骨干BN运行统计，骨干卷积仍训练。若batch=32显存不足，降低批大小。
+显式 `--from-scratch` 仍用于公平消融或CPU测试；`--resume` 恢复完整checkpoint，
+不要求另外准备预训练文件。输出目录必须新建且为空。

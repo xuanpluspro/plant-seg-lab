@@ -16,8 +16,8 @@ def parse_args():
     p = argparse.ArgumentParser(description=__doc__)
     p.add_argument("--data-path", default="VOCdevkit")
     p.add_argument("--output", default="run/train/ossseg")
-    init = p.add_mutually_exclusive_group(required=True)
-    init.add_argument("--backbone-weights", help="Local torchvision ResNet-50 ImageNet weights")
+    init = p.add_mutually_exclusive_group()
+    init.add_argument("--backbone-weights", help="Local torchvision ResNet-50 weights; default: pretrained/resnet50.pth")
     init.add_argument("--from-scratch", action="store_true", help="Explicitly train without pretraining")
     init.add_argument("--resume", help="Resume this project's last.pth with optimizer/RNG state")
     p.add_argument("--num-classes", type=int, default=1, help="Foreground classes excluding background; must be 1")
@@ -41,7 +41,18 @@ def parse_args():
     return p.parse_args()
 
 
+def resolve_initialization(args):
+    if not args.backbone_weights and not args.from_scratch and not args.resume:
+        args.backbone_weights = str(Path(__file__).resolve().parent / "pretrained" / "resnet50.pth")
+    if args.backbone_weights and not Path(args.backbone_weights).is_file():
+        raise FileNotFoundError(
+            f"Pretrained backbone missing: {args.backbone_weights}. "
+            "Run python download_pretrained.py, or supply --backbone-weights PATH. "
+            "Random initialization requires explicit --from-scratch.")
+
+
 def train(args):
+    resolve_initialization(args)
     if args.num_classes != 1 or args.epochs < 1 or args.batch_size < 1 or args.workers < 0:
         raise ValueError("Require 1 foreground class, positive epochs/batch-size, nonnegative workers")
     if args.lr <= 0 or args.weight_decay < 0:
@@ -75,6 +86,7 @@ def train(args):
     initialization = args.backbone_weights or "random"
     if args.backbone_weights:
         model.load_backbone(args.backbone_weights)
+        print(f"Loaded pretrained ResNet-50 backbone: {args.backbone_weights}", flush=True)
     if args.from_scratch:
         print("Explicit random initialization; no weights will be downloaded.", flush=True)
     model.to(device)

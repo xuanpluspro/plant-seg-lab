@@ -8,3 +8,5 @@ run/
 .venv/
 data/*
 !data/README.md
+pretrained/*
+!pretrained/README.md
