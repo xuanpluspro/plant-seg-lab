@@ -50,7 +50,11 @@ def read_checkpoint(path):
 
 def load_model(path, device):
     checkpoint = read_checkpoint(path)
-    model = OSSSeg(**checkpoint["model_config"]).to(device)
+    config = dict(checkpoint["model_config"])
+    # Checkpoints predating module switches belong to the original baseline.
+    config.setdefault("use_adpm", False)
+    config.setdefault("use_dynamic_fusion", False)
+    model = OSSSeg(**config).to(device)
     model.load_state_dict(checkpoint["model"], strict=True)
     return model.eval(), checkpoint
 

@@ -6,3 +6,5 @@ VOCdevkit/
 VOC2012/
 run/
 .venv/
+data/*
+!data/README.md

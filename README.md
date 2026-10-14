@@ -1,17 +1,61 @@
-# OSSSeg：RGB 植物二分类语义分割
+# Plant Seg Lab：RGB 植物二分类语义分割
+
+当前默认模型同时替换 CSSP/CFB 和三个 CAFR/FEM：**ADPM + 跨尺度动态调制**。这是待实验验证的候选结构，不宣称原创性或已提升精度。
 
 基于 [MODA/OSSDet](https://github.com/shuaihao-han/MODA) 的公开特征模块，替换本仓库原 ResNet50-U-Net。网络、模块及损失均在 model/，不依赖 MMRotate、MMDetection、MMCV。这是 OSSDet 衍生的 RGB 分割模型，不是原论文的八波段旋转框检测模型，原论文 mAP 不适用于它。
 
 ## 模型
 
-RGB → ResNet-50四级特征 → 通道统一为256 → CFB深层交互 → SSAF自顶向下融合 → 像素监督的植物前景引导 → FEM自底向上精炼 → 新增多尺度分割解码器与RGB细节分支 → 两通道logits。
+RGB → ResNet-50四级特征 → 通道统一为256 → ADPM深层方向感知 → SSAF自顶向下融合 → 像素监督的植物前景引导 → 跨尺度动态调制自底向上精炼 → 新增多尺度分割解码器与RGB细节分支 → 两通道logits。
 
 - model/ossseg.py：总体网络。默认 ResNet-50，新增分割部分用GroupNorm。
-- model/cfb.py、ssaf.py、fem.py：原样引入的官方特征模块。
+- model/adpm.py：替换CSSP/CFB，1×1降通道→3×3、1×7、7×1深度卷积→逐位置softmax分支选择→投影与残差。
+- model/dynamic_fusion.py：替换三个CAFR/FEM，相邻层对齐→联合特征与归一化差异生成空间仿射参数→细化与深层残差。细化保留Conv/GroupNorm/ReLU、深度可分离卷积、SE。
+- model/cfb.py、ssaf.py、fem.py：保留官方特征模块，CFB/FEM供消融基线使用，SSAF仍在默认模型中使用。
 - model/losses.py：交叉熵 + 前景Dice + 0.2×辅助前景BCE。
 - model/README.md：原始模块与改造部分的区别、来源与许可证。
 
-512输入时CFB在16×16特征上计算全局相关性。骨干保留RGB输入，不能产生RGB没有的近红外等信息。三个特征交互模块在AMP中以FP32执行以保护相关性/距离计算；骨干及分割头仍可混合精度运行。
+512输入时ADPM在16×16特征上处理；三个动态调制模块输出64×64、32×32、16×16。骨干保留RGB输入，不能产生RGB没有的近红外等信息。三个特征交互模块在AMP中以FP32执行以保护相关性/距离计算；骨干及分割头仍可混合精度运行。
+
+
+## 同时替换与消融
+
+默认构造 `OSSSeg()` 同时启用两个替代模块，训练无需额外开关。
+
+| 方案 | 训练参数 |
+|---|---|
+| 两者同时替换（默认） | `--adpm --dynamic-fusion` |
+| 原模型基线 | `--no-adpm --no-dynamic-fusion` |
+| 仅替换CSSP | `--adpm --no-dynamic-fusion` |
+| 仅替换CAFR | `--no-adpm --dynamic-fusion` |
+
+ADPM输入输出均为 `[B,C,h,w]`，先投影到C/4通道，三个分支处理同一压缩特征。
+选择器输出 `[B,3,h,w]`，softmax沿分支轴，每个位置三个权重和为1，权重在通道间广播。
+动态调制输入 `[B,C,2h,2w]` 与 `[B,C,h,w]`，输出 `[B,C,h,w]`。
+三个位置参数独立，依次更新1/8、1/16、1/32尺度。
+差异是每个位置沿通道L2归一化后的绝对差，提供线索但不等于语义错误。
+调制为 `S*(1+tanh(a))+tanh(b)`，生成器零初始化，使初始缩放为1、偏移为0；
+输出为 `T+Refine(M)`。新模块采用GroupNorm，避免小批量BN统计不稳。
+
+结构开关记录在checkpoint中，验证/预测自动恢复。旧checkpoint缺少开关时按旧模型加载；
+恢复旧训练需显式传 `--no-adpm --no-dynamic-fusion`。不能把旧完整模型checkpoint直接
+恢复为新结构；新实验可使用相同ResNet骨干预训练权重，必须使用新的输出目录。
+
+### AutoDL快速启动
+
+```bash
+cd /root/autodl-tmp
+git clone https://github.com/xuanpluspro/plant-seg-lab.git
+cd plant-seg-lab
+pip install -r requirements.txt
+python check_data.py --data-path data/VegAnn
+python train_medical.py --data-path data/VegAnn --from-scratch --epochs 30 --batch-size 2 --workers 4 --output run/train/adpm_dynamic
+```
+
+先以batch-size=2检查真实GPU显存，再提高批大小；尚未验证32GB GPU能承受的最大批大小。
+本地ResNet权重可用 `--backbone-weights model/weights/resnet50.pth` 替代 `--from-scratch`。
+数据放在data/下且不提交Git；**当前实际读取的是ImageSets/Segmentation，不是Main**。
+当前掩膜编码依然要求0/255，不会自动把0/1猜作同一数据。
 
 ## 安装
 
@@ -114,3 +158,12 @@ python -m unittest discover -s tests -v
 ~~~
 
 包含默认256通道模型512前向/反向/重载、辅助分支梯度、标签映射、划分泄漏、指标和合成VOC的训练/续训/测试/预测检查。CPU工作流不会下载模型权重、访问用户数据或使用GPU。未在真实植物数据上训练，未验证真实精度及CUDA/AMP表现。原论文的多光谱检测成绩不能作为本改造版的分割成绩。
+
+## 替代模块本地验证记录
+
+2026-10-14，PyTorch 2.5.1 CPU / torchvision 0.20.1：8项unittest通过（23.35秒），
+包括默认width=256的512×512前向/反向/重载，三个相邻尺度融合的有限梯度，
+四种消融配置及旧格式checkpoint加载，合成VOC训练/中断续训/测试/预测。
+默认双替换模型参数36,611,682，原基线33,715,104；保留完整细化路径使总参数增加约8.6%。
+没有真实数据精度结果，CUDA/AMP尚未验证。docs/figures下旧结构图描述的是原基线，
+不代表当前ADPM+动态调制默认结构。

@@ -1,7 +1,7 @@
 name: OSSSeg CPU checks
 on:
   push:
-    branches: ["codex/ossseg-rgb-voc512"]
+    branches: ["main"]
   pull_request:
     paths: ["model/**", "utils/**", "*.py", "tests/**", "requirements.txt", ".github/workflows/ossseg-tests.yml"]
 permissions:

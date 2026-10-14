@@ -11,6 +11,8 @@ from torchvision.models import resnet50
 from .cfb import CascadeFusionBlock
 from .ssaf import SpectralSpatialAdaptiveFusion
 from .fem import FeatureEnhancementModule
+from .adpm import AdaptiveDirectionalPerception
+from .dynamic_fusion import CrossScaleDynamicModulation
 
 
 def conv_block(cin, cout, kernel=3):
@@ -20,23 +22,28 @@ def conv_block(cin, cout, kernel=3):
 
 
 class OSSSeg(nn.Module):
-    def __init__(self, num_classes=2, width=256, freeze_backbone_bn=True):
+    def __init__(self, num_classes=2, width=256, freeze_backbone_bn=True,
+                 use_adpm=True, use_dynamic_fusion=True):
         super().__init__()
         if num_classes != 2:
             raise ValueError("OSSSeg is configured for background/plant (2 classes)")
         if width < 8 or width % 8:
             raise ValueError("width must be a positive multiple of 8")
         self.model_config = dict(num_classes=2, width=width,
-                                 freeze_backbone_bn=freeze_backbone_bn)
+                                 freeze_backbone_bn=freeze_backbone_bn,
+                                 use_adpm=use_adpm, use_dynamic_fusion=use_dynamic_fusion)
         self.freeze_backbone_bn = freeze_backbone_bn
         # Never download weights in the constructor.
         self.backbone = resnet50(weights=None)
         self.backbone.fc = nn.Identity()
         self.laterals = nn.ModuleList([
             conv_block(c, width, 1) for c in [256, 512, 1024, 2048]])
-        self.cfb = CascadeFusionBlock(width)
+        self.use_adpm = use_adpm
+        self.cfb = (AdaptiveDirectionalPerception(width) if use_adpm
+                    else CascadeFusionBlock(width))
         self.ssaf = nn.ModuleList([SpectralSpatialAdaptiveFusion(width) for _ in range(3)])
-        self.fem = nn.ModuleList([FeatureEnhancementModule(width) for _ in range(3)])
+        fusion = CrossScaleDynamicModulation if use_dynamic_fusion else FeatureEnhancementModule
+        self.fem = nn.ModuleList([fusion(width) for _ in range(3)])
         self.foreground_head = nn.Sequential(conv_block(width, 64), nn.Conv2d(64, 1, 1))
         self.foreground_smooth = conv_block(width, width, 1)
         # Segmentation-specific decoder; no rotated boxes or NMS.
@@ -80,7 +87,8 @@ class OSSSeg(nn.Module):
         # Only feature-interaction path is FP32; backbone and dense head can use AMP.
         with torch.autocast(device_type=image.device.type, enabled=False):
             xs = [t.float() for t in xs]
-            xs[-1] = self.cfb(xs[-1], xs[-1])
+            xs[-1] = (self.cfb(xs[-1]) if self.use_adpm
+                      else self.cfb(xs[-1], xs[-1]))
             for i in range(2, -1, -1):
                 xs[i] = self.ssaf[i](xs[i + 1], xs[i])
             aux = self.foreground_head(xs[0])

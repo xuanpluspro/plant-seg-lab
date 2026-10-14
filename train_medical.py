@@ -22,6 +22,8 @@ def parse_args():
     init.add_argument("--resume", help="Resume this project's last.pth with optimizer/RNG state")
     p.add_argument("--num-classes", type=int, default=1, help="Foreground classes excluding background; must be 1")
     p.add_argument("--width", type=int, default=256)
+    p.add_argument("--adpm", action=argparse.BooleanOptionalAction, default=True)
+    p.add_argument("--dynamic-fusion", action=argparse.BooleanOptionalAction, default=True)
     p.add_argument("--freeze-backbone-bn", action=argparse.BooleanOptionalAction, default=True)
     p.add_argument("--epochs", type=int, default=100)
     p.add_argument("--batch-size", type=int, default=2)
@@ -45,7 +47,9 @@ def train(args):
     device = resolve_device(args.device)
     root = voc_root(args.data_path)
     splits = validate_splits(root)
-    model_config = dict(num_classes=2, width=args.width, freeze_backbone_bn=args.freeze_backbone_bn)
+    model_config = dict(num_classes=2, width=args.width, freeze_backbone_bn=args.freeze_backbone_bn,
+                        use_adpm=getattr(args, "adpm", True),
+                        use_dynamic_fusion=getattr(args, "dynamic_fusion", True))
     training_config = {key: getattr(args, key) for key in (
         "epochs", "batch_size", "workers", "lr", "weight_decay", "dice_weight",
         "aux_weight", "seed", "amp")}
@@ -76,7 +80,10 @@ def train(args):
     start, best, history = 0, -1., []
     if args.resume:
         checkpoint = read_checkpoint(args.resume)
-        if (checkpoint["model_config"] != model_config
+        saved_config = dict(checkpoint["model_config"])
+        saved_config.setdefault("use_adpm", False)
+        saved_config.setdefault("use_dynamic_fusion", False)
+        if (saved_config != model_config
                 or checkpoint["training_config"] != training_config
                 or checkpoint["splits"] != splits):
             raise ValueError("Resume requires identical model/training settings and split IDs, including total epochs")
