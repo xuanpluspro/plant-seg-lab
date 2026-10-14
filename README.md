@@ -215,3 +215,28 @@ python train_medical.py --data-path data/VOC2012 --epochs 30 --batch-size 32 --w
 当前默认冻结骨干BN运行统计，骨干卷积仍训练。若batch=32显存不足，降低批大小。
 显式 `--from-scratch` 仍用于公平消融或CPU测试；`--resume` 恢复完整checkpoint，
 不要求另外准备预训练文件。输出目录必须新建且为空。
+
+## 训练结束的最终结果（自动生成）
+
+参考vegann-seg-benchmark，训练结束自动加载 **best.pth**，重新评估验证集和训练时
+已经登记的独立测试集，再统计性能。测试集不参与选择best。输出目录新增：
+
+| 文件 | 内容 |
+|---|---|
+| metrics.json | 最佳epoch、验证/测试精度、模型参数和benchmark汇总 |
+| results.csv | 验证/测试各一行，可用Excel打开；精度数值为0~1 |
+| benchmark.json | 参数量、完整性标记、部分/完整GFLOPs及GPU FPS/延迟 |
+
+终端也会打印最终前景IoU、mIoU、Dice、Precision、Recall和PixAcc。
+没有test.txt时只生成验证集结果，并明确注明test未提供，不会用验证集冒充测试集。
+`--no-benchmark`只关闭性能测速，仍导出最终精度结果。先保存精度结果，再测速，
+即使测速失败也保留metrics.json和results.csv，并记录测速错误。
+
+已经训练完成的模型无需重新训练，更新代码后执行：
+
+```bash
+python summarize.py --data-path data/VOC2012 --weights run/train/riceseg_pretrained_bs32_ep30/best.pth --device cuda --batch-size 32 --workers 4
+```
+
+数据划分必须与checkpoint登记的train/val/test完全相同。输出默认位于权重目录；
+`--output run/report/riceseg`可生成到另一目录，不修改权重文件。

@@ -141,21 +141,17 @@ def train(args):
         (output / "history.json").write_text(json.dumps(history, indent=2, allow_nan=False), encoding="utf-8")
         print(json.dumps(history[-1], allow_nan=False), flush=True)
     if history:
+        from utils.results import export_final_results
+        best_checkpoint = read_checkpoint(output / "best.pth")
+        model.load_state_dict(best_checkpoint["model"], strict=True)
+        export_final_results(model, best_checkpoint, output / "best.pth", root, output,
+                             device, args.batch_size, args.workers,
+                             getattr(args, "benchmark", True),
+                             getattr(args, "benchmark_warmup", 50),
+                             getattr(args, "benchmark_iterations", 200))
         from utils.plot_results import plot_training_curves
         plot_training_curves([h["train_loss"] for h in history],
                              [h["Loss"] for h in history], history, str(output))
-
-    if history and getattr(args, "benchmark", True):
-        from utils.benchmark import benchmark_model
-        best_checkpoint = read_checkpoint(output / "best.pth")
-        model.load_state_dict(best_checkpoint["model"], strict=True)
-        print("Benchmarking best checkpoint: batch=1, 512x512, FP32, TF32 disabled", flush=True)
-        report = benchmark_model(model, 512, getattr(args, "benchmark_warmup", 50),
-                                 getattr(args, "benchmark_iterations", 200))
-        report.update(checkpoint=str(output / "best.pth"),
-                      best_epoch=best_checkpoint["epoch"] + 1, model_config=model.model_config)
-        (output / "benchmark.json").write_text(json.dumps(report, indent=2, allow_nan=False), encoding="utf-8")
-        print(json.dumps(report, indent=2, allow_nan=False), flush=True)
 
 
 if __name__ == "__main__":
