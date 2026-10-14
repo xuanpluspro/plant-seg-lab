@@ -20,6 +20,6 @@ jobs:
         with:
           python-version: "3.11"
       - run: pip install torch==2.5.1 torchvision==0.20.1 --index-url https://download.pytorch.org/whl/cpu
-      - run: pip install "numpy>=1.24,<3" "Pillow>=10" "matplotlib>=3.7"
-      - run: python -m compileall -q model utils train_medical.py val.py predict.py check_data.py tests
+      - run: pip install "numpy>=1.24,<3" "Pillow>=10" "matplotlib>=3.7" "fvcore==0.1.5.post20221221"
+      - run: python -m compileall -q model utils train_medical.py val.py predict.py check_data.py benchmark.py tests
       - run: python -m unittest discover -s tests -v

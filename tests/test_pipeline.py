@@ -39,6 +39,10 @@ class Pipeline(unittest.TestCase):
             # Plotting is exercised separately by normal training; keep this test fast.
             with patch("utils.plot_results.plot_training_curves"):
                 train_medical.train(args)
+            report = json.loads((Path(args.output)/"benchmark.json").read_text())
+            self.assertEqual(report["input_shape"], [1, 3, 512, 512])
+            self.assertIsNone(report["fps"])
+            self.assertIsNone(report["flops_error"])
             reference = read_checkpoint(Path(args.output)/"last.pth")
             args.output = str(Path(d)/"resumed")
             original_save = train_medical.save_checkpoint

@@ -35,6 +35,9 @@ def parse_args():
     p.add_argument("--seed", type=int, default=11)
     p.add_argument("--device", default="auto")
     p.add_argument("--amp", action=argparse.BooleanOptionalAction, default=True)
+    p.add_argument("--benchmark", action=argparse.BooleanOptionalAction, default=True)
+    p.add_argument("--benchmark-warmup", type=int, default=50)
+    p.add_argument("--benchmark-iterations", type=int, default=200)
     return p.parse_args()
 
 
@@ -43,6 +46,8 @@ def train(args):
         raise ValueError("Require 1 foreground class, positive epochs/batch-size, nonnegative workers")
     if args.lr <= 0 or args.weight_decay < 0:
         raise ValueError("Invalid optimizer settings")
+    if getattr(args, "benchmark_warmup", 50) < 0 or getattr(args, "benchmark_iterations", 200) < 1:
+        raise ValueError("Require nonnegative benchmark warmup and positive iterations")
     seed_everything(args.seed)
     device = resolve_device(args.device)
     root = voc_root(args.data_path)
@@ -127,6 +132,18 @@ def train(args):
         from utils.plot_results import plot_training_curves
         plot_training_curves([h["train_loss"] for h in history],
                              [h["Loss"] for h in history], history, str(output))
+
+    if history and getattr(args, "benchmark", True):
+        from utils.benchmark import benchmark_model
+        best_checkpoint = read_checkpoint(output / "best.pth")
+        model.load_state_dict(best_checkpoint["model"], strict=True)
+        print("Benchmarking best checkpoint: batch=1, 512x512, FP32, TF32 disabled", flush=True)
+        report = benchmark_model(model, 512, getattr(args, "benchmark_warmup", 50),
+                                 getattr(args, "benchmark_iterations", 200))
+        report.update(checkpoint=str(output / "best.pth"),
+                      best_epoch=best_checkpoint["epoch"] + 1, model_config=model.model_config)
+        (output / "benchmark.json").write_text(json.dumps(report, indent=2, allow_nan=False), encoding="utf-8")
+        print(json.dumps(report, indent=2, allow_nan=False), flush=True)
 
 
 if __name__ == "__main__":

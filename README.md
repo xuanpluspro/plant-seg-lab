@@ -167,3 +167,38 @@ python -m unittest discover -s tests -v
 默认双替换模型参数36,611,682，原基线33,715,104；保留完整细化路径使总参数增加约8.6%。
 没有真实数据精度结果，CUDA/AMP尚未验证。docs/figures下旧结构图描述的是原基线，
 不代表当前ADPM+动态调制默认结构。
+
+## 参数量、计算量与推理速度
+
+参考 xuanpluspro/vegann-seg-benchmark 的统计口径，训练结束后默认加载best.pth，
+自动生成运行目录中的 **benchmark.json**。原来的分割指标、best模型选择依据不变。
+
+- parameters / params_m：总参数个数 / 百万参数。
+- counted_gflops：fvcore能够计数的操作；一次乘加计为一次操作，与按两次计数的工具不能直接比较。
+- gflops：只有没有unsupported_ops时才填写完整统计值，否则为null。
+- flops_complete / unsupported_ops / flops_error：计算量统计完整性及遗漏、错误。
+- latency_ms / latency_median_ms / latency_p95_ms：平均、中位数和P95单图GPU前向耗时。
+- fps：1000/平均毫秒耗时，batch固定为1。
+- precision / gpu_name / input_shape / 环境版本：记录可比较的测试条件。
+
+测速为PyTorch eager FP32，关闭TF32和autocast，输入默认1×3×512×512，预热50次，
+测量200次，使用CUDA events同步。范围是模型前向返回logits，不包含读取图片、
+预处理、CPU/GPU传输、后处理或文件保存；不是TensorRT，也不代表端到端FPS。
+训练AMP开关与这项FP32测速相互独立。CPU可计数FLOPs，但GPU FPS和延迟为null。
+含自定义/非支持算子时，请明确报告“部分GFLOPs”，不能将counted_gflops当成完整计算量。
+
+拉取后更新新增依赖：
+
+```bash
+git pull
+pip install -r requirements.txt
+```
+
+已有checkpoint也能单独测速，不需要数据集或重新训练：
+
+```bash
+python benchmark.py --weights run/train/riceseg_adpm_dynamic/best.pth --device cuda
+```
+
+训练可用 `--benchmark-warmup 50 --benchmark-iterations 200` 调整次数；
+`--no-benchmark` 可关闭训练末尾的自动统计，之后再单独执行benchmark.py。
