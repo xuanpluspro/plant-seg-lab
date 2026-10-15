@@ -1,8 +1,8 @@
-"""Official MPCNet MPM and its dependencies, preserved from upstream.
+"""MPCNet-derived MPM: 5531 default, original 7753 compatibility.
 
 Source: https://github.com/Wangtao-Bao/MPCNet/blob/5024ea51e8abdf7bc40e36489041143c468b1fdf/MPCNet.py
 Authors: Wangtao-Bao/MPCNet contributors. See model/MPM_SOURCE.md.
-Only unrelated network classes and the unused thop import were omitted.
+The MPM kernel selection is adapted; helper classes retain upstream behavior.
 """
 import torch
 import torch.nn as nn
@@ -132,23 +132,29 @@ class CoordAttiton(nn.Module):
 
 
 class MPM(nn.Module):
-    def __init__(self, in_channel):
+    def __init__(self, in_channel, kernel_variant="5531"):
         super(MPM, self).__init__()
+        if kernel_variant not in ("5531", "7753"):
+            raise ValueError("MPM kernel_variant must be 5531 or 7753")
+        self.kernel_variant = kernel_variant
+        small, medium, large = (1, 3, 5) if kernel_variant == "5531" else (3, 5, 7)
+        # Attribute names retained for strict loading of original 7753 checkpoints.
+
 
         self.Conv_3 = nn.Sequential(
-            nn.Conv2d(in_channel // 4, in_channel // 4, 3, 1, padding=1),
+            nn.Conv2d(in_channel // 4, in_channel // 4, small, 1, padding=small // 2),
             nn.BatchNorm2d(in_channel // 4),
             nn.ReLU()
         )
 
         self.Conv_5 = nn.Sequential(
-            nn.Conv2d(in_channel // 4, in_channel // 4, 5, 1, padding=2),
+            nn.Conv2d(in_channel // 4, in_channel // 4, medium, 1, padding=medium // 2),
             nn.BatchNorm2d(in_channel // 4),
             nn.ReLU()
         )
 
         self.Conv_7 = nn.Sequential(
-            nn.Conv2d(in_channel // 4, in_channel // 4, 7, 1, padding=3),
+            nn.Conv2d(in_channel // 4, in_channel // 4, large, 1, padding=large // 2),
             nn.BatchNorm2d(in_channel // 4),
             nn.ReLU()
         )
@@ -164,11 +170,17 @@ class MPM(nn.Module):
         x_3 = x[:, (c // 4) * 2:(c // 4) * 3, :, :]
         x_4 = x[:, (c // 4) * 3:, :, :]
 
-        x_4_7 = self.Conv_7(x_4)
-        x_3_5 = self.Conv_5(x_3)
-        x_2_3 = self.Conv_3(x_2)
-        x_1_1 = self.Conv_7(x_1)
-
-        out = self.ca(self.Conv(torch.cat((x_1_1, x_2_3, x_3_5, x_4_7, x), 1)))
+        if self.kernel_variant == "5531":
+            # 5x5, 5x5, 3x3, 1x1; two 5x5 branches share Conv and BN.
+            branches = (self.Conv_7(x_1), self.Conv_7(x_2),
+                        self.Conv_5(x_3), self.Conv_3(x_4))
+        else:
+            # Exact upstream call order, including shared BN updates.
+            x_4_7 = self.Conv_7(x_4)
+            x_3_5 = self.Conv_5(x_3)
+            x_2_3 = self.Conv_3(x_2)
+            x_1_1 = self.Conv_7(x_1)
+            branches = (x_1_1, x_2_3, x_3_5, x_4_7)
+        out = self.ca(self.Conv(torch.cat((*branches, x), 1)))
 
         return out

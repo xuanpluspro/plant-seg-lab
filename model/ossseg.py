@@ -24,7 +24,7 @@ def conv_block(cin, cout, kernel=3):
 
 class OSSSeg(nn.Module):
     def __init__(self, num_classes=2, width=256, freeze_backbone_bn=True,
-                 use_adpm=None, use_dynamic_fusion=True, cssp_module=None):
+                 use_adpm=None, use_dynamic_fusion=True, cssp_module=None, mpm_variant="5531"):
         super().__init__()
         if not 2 <= num_classes <= 256:
             raise ValueError("num_classes must include background and be in 2..256")
@@ -41,7 +41,7 @@ class OSSSeg(nn.Module):
         self.model_config = dict(num_classes=num_classes, width=width,
                                  freeze_backbone_bn=freeze_backbone_bn,
                                  use_adpm=use_adpm, use_dynamic_fusion=use_dynamic_fusion,
-                                 cssp_module=cssp_module)
+                                 cssp_module=cssp_module, mpm_variant=mpm_variant)
         self.freeze_backbone_bn = freeze_backbone_bn
         # Never download weights in the constructor.
         self.backbone = resnet50(weights=None)
@@ -49,8 +49,9 @@ class OSSSeg(nn.Module):
         self.laterals = nn.ModuleList([
             conv_block(c, width, 1) for c in [256, 512, 1024, 2048]])
         self.use_adpm = use_adpm
-        self.cfb = {'mpm': MPM, 'adpm': AdaptiveDirectionalPerception,
-                    'cfb': CascadeFusionBlock}[cssp_module](width)
+        self.cfb = (MPM(width, kernel_variant=mpm_variant) if cssp_module == 'mpm'
+                    else {'adpm': AdaptiveDirectionalPerception,
+                          'cfb': CascadeFusionBlock}[cssp_module](width))
         self.ssaf = nn.ModuleList([SpectralSpatialAdaptiveFusion(width) for _ in range(3)])
         fusion = CrossScaleDynamicModulation if use_dynamic_fusion else FeatureEnhancementModule
         self.fem = nn.ModuleList([fusion(width) for _ in range(3)])

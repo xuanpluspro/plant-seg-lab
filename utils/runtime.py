@@ -54,6 +54,7 @@ def normalize_model_config(config):
     config.setdefault('use_adpm', False)
     config.setdefault('use_dynamic_fusion', False)
     config.setdefault('cssp_module', 'adpm' if config['use_adpm'] else 'cfb')
+    config.setdefault("mpm_variant", "7753" if config["cssp_module"] == "mpm" else "5531")
     return config
 
 

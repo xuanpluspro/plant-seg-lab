@@ -1,6 +1,6 @@
 # Plant Seg Lab：RGB 植物语义分割
 
-当前默认模型同时替换 CSSP/CFB 和三个 CAFR/FEM：**官方 MPM + 跨尺度动态调制**。这是待实验验证的候选结构，不宣称原创性或已提升精度。
+当前默认模型同时替换 CSSP/CFB 和三个 CAFR/FEM：**MPM-5531 + 跨尺度动态调制**。这是待实验验证的候选结构，不宣称原创性或已提升精度。
 
 基于 [MODA/OSSDet](https://github.com/shuaihao-han/MODA) 的公开特征模块，替换本仓库原 ResNet50-U-Net。网络、模块及损失均在 model/，不依赖 MMRotate、MMDetection、MMCV。这是 OSSDet 衍生的 RGB 分割模型，不是原论文的八波段旋转框检测模型，原论文 mAP 不适用于它。
 
@@ -9,7 +9,7 @@
 RGB → ResNet-50四级特征 → 通道统一为256 → MPM深层多尺度感知 → SSAF自顶向下融合 → 像素监督的植物前景引导 → 跨尺度动态调制自底向上精炼 → 新增多尺度分割解码器与RGB细节分支 → K通道logits（默认二分类）。
 
 - model/ossseg.py：总体网络。默认 ResNet-50，新增分割部分用GroupNorm。
-- model/mpm.py：官方MPCNet的MPM及依赖，默认替换CSSP/CFB；来源与固定版本见model/MPM_SOURCE.md。
+- model/mpm.py：MPCNet衍生的MPM，默认5531，保留7753兼容；默认替换CSSP/CFB；来源与固定版本见model/MPM_SOURCE.md。
 - model/adpm.py：保留旧候选用于消融，1×1降通道→3×3、1×7、7×1深度卷积→逐位置softmax分支选择→投影与残差。
 - model/dynamic_fusion.py：替换三个CAFR/FEM，相邻层对齐→联合特征与归一化差异生成空间仿射参数→细化与深层残差。细化保留Conv/GroupNorm/ReLU、深度可分离卷积、SE。
 - model/cfb.py、ssaf.py、fem.py：保留官方特征模块，CFB/FEM供消融基线使用，SSAF仍在默认模型中使用。
@@ -25,7 +25,7 @@ RGB → ResNet-50四级特征 → 通道统一为256 → MPM深层多尺度感�
 
 | 方案 | 训练参数 |
 |---|---|
-| 官方MPM＋动态调制（默认） | `--cssp-module mpm --dynamic-fusion` |
+| MPM-5531＋动态调制（默认） | `--cssp-module mpm --dynamic-fusion` |
 | 原模型基线 | `--cssp-module cfb --no-dynamic-fusion` |
 | 仅使用官方MPM | `--cssp-module mpm --no-dynamic-fusion` |
 | 仅替换CAFR | `--cssp-module cfb --dynamic-fusion` |
@@ -271,16 +271,29 @@ python train_medical.py --data-path data/VOC201201 --mask-encoding index --num-c
 保持512×512图像与掩码；本次没有添加隐式缩放。所有对比实验应统一划分、预训练来源、标签语义、尺寸和统计口径。真实CUDA精度与性能需在AutoDL验证。
 
 
-## 官方MPM替换CSSP（当前默认）
+## MPM替换CSSP（7753原始实现记录）
 
-默认最深层为`model/mpm.py::MPM`，严格保留MPCNet官方代码的模块主体：通道四分、普通3/5/7卷积＋BN/ReLU、两路共用同一个Conv_7、四路结果与原输入拼接到2C、CBR融合回C、坐标注意力。CBR并非纯1×1卷积，其自定义activation包含ReLU、7×7深度卷积和BN；CAM采用h-swish，中间通道max(8,C//32)。输入输出均为[B,C,h,w]，512输入对应最深层[B,256,16,16]。未加额外MPM残差，未加入QKV。三个动态调制模块未改动。
+上一次7753版本采用`model/mpm.py::MPM`，保留MPCNet官方模块主体：通道四分、普通3/5/7卷积＋BN/ReLU、两路共用同一个Conv_7、四路结果与原输入拼接到2C、CBR融合回C、坐标注意力。CBR并非纯1×1卷积，其自定义activation包含ReLU、7×7深度卷积和BN；CAM采用h-swish，中间通道max(8,C//32)。输入输出均为[B,C,h,w]，512输入对应最深层[B,256,16,16]。未加额外MPM残差，未加入QKV。三个动态调制模块未改动。
 
 来源固定在上游commit `5024ea51e8abdf7bc40e36489041143c468b1fdf`，详见model/MPM_SOURCE.md。上游所需类原样提取，不引入检测模型或thop依赖。官方MPM使用BN，这些BN不属于ResNet骨干，因此不受freeze_backbone_bn影响，训练时会更新统计量。
 
 旧检查点验证/预测/汇总会根据配置加载原来的ADPM或CFB，不会自动替换为MPM。**MPM新实验应从相同ResNet预训练权重开始，不能resume旧ADPM完整权重**；输出采用新名称，避免混淆实验。类别与0/1、0/255编码、结果导出接口保持一致。
 
 ```bash
-python train_medical.py --data-path data/VOC201201 --mask-encoding index --num-classes 1 --cssp-module mpm --backbone-weights pretrained/resnet50.pth --batch-size 32 --epochs 30 --workers 4 --device cuda --amp --output run/train/vegann01_mpm_dynamic_pretrained_bs32_ep30
+python train_medical.py --data-path data/VOC201201 --mask-encoding index --num-classes 1 --cssp-module mpm --backbone-weights pretrained/resnet50.pth --batch-size 32 --epochs 30 --workers 4 --device cuda --amp --output run/train/vegann01_mpm5531_dynamic_pretrained_bs32_ep30
 ```
 
 旧`--adpm`与`--no-adpm`保留为兼容别名，分别选择adpm与cfb，不能与`--cssp-module`同时使用。当前默认MPM与ADPM的性能高低仍需真实数据实验，不预先宣称提升。
+
+
+## 当前默认卷积核：5531
+
+MPM四组通道依次使用5×5、5×5、3×3、1×1普通卷积＋BN/ReLU，两个5×5分支沿用共享卷积和BN设计。原输入Concat、2C→C融合、融合层自定义7×7深度卷积激活及CAM均未改变；本次只改变四分支卷积核和对应通道组的路由，没有加入QKV。模型默认仍位于最深层，未修改骨干步长或输入尺寸。
+
+`--mpm-variant 5531`为默认；`--mpm-variant 7753`选择此前的官方实现，保留原通道组路由和共享BN调用顺序。新检查点记录mpm_variant，旧MPM检查点缺少此字段时自动按7753恢复，ADPM/CFB旧检查点仍按旧结构加载。5531需新实验目录，从相同ResNet骨干权重开始，不要resume7753权重。
+
+```bash
+python train_medical.py --data-path data/VOC201201 --mask-encoding index --num-classes 1 --cssp-module mpm --mpm-variant 5531 --backbone-weights pretrained/resnet50.pth --batch-size 32 --epochs 30 --workers 4 --device cuda --amp --output run/train/vegann01_mpm5531_dynamic_pretrained_bs32_ep30
+```
+
+5531是本项目改写，不再称为原版MPM复现。分支卷积计算量较7753降低约54.5%，整个模块仍包含其他计算；真实精度是否更高尚未验证。

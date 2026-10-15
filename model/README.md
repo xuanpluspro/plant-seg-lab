@@ -9,7 +9,7 @@ cfb.py、ssaf.py、fem.py从上游tools/my_module/原样复制。随附LICENSE.M
 |---|---|
 | 八波段ResNet-50 | 替换为torchvision RGB ResNet-50 |
 | 横向投影 | 用GroupNorm卷积重写 |
-| CFB、SSAF、FEM | 上游文件保留，默认以官方MPM替换CFB（ADPM保留为旧实验选项）、动态调制替换FEM；SSAF沿用。开关可恢复基线 |
+| CFB、SSAF、FEM | 上游文件保留，默认以MPM-5531替换CFB（ADPM保留为旧实验选项）、动态调制替换FEM；SSAF沿用。开关可恢复基线 |
 | 框生成的目标图、ActivationLoss | 改为真实植物像素掩膜的BCE监督 |
 | 前景引导 | 保留F*(1+sigmoid(aux))残差加权 |
 | 旋转框头、额外检测尺度、NMS | 移除 |
@@ -36,4 +36,4 @@ cfb.py、ssaf.py、fem.py从上游tools/my_module/原样复制。随附LICENSE.M
 
 ## 当前默认CSSP替换
 
-mpm.py提取官方MPCNet的MPM和原始依赖，版本、共享卷积和融合层细节见[MPM_SOURCE.md](MPM_SOURCE.md)。ADPM不等同于官方MPM；未加入QKV注意力。
+mpm.py基于官方MPCNet，默认将四分支改为5531，保留7753检查点兼容与原始依赖，版本、共享卷积和融合层细节见[MPM_SOURCE.md](MPM_SOURCE.md)。ADPM不等同于官方MPM；未加入QKV注意力。

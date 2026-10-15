@@ -29,6 +29,7 @@ def parse_args():
                       help="CSSP replacement; default mpm (official MPCNet)")
     cssp.add_argument("--adpm", action=argparse.BooleanOptionalAction, default=None,
                       help="Legacy: --adpm selects ADPM; --no-adpm selects CFB")
+    p.add_argument("--mpm-variant", choices=("5531", "7753"), default="5531")
     p.add_argument("--dynamic-fusion", action=argparse.BooleanOptionalAction, default=True)
     p.add_argument("--width", type=int, default=256)
     p.add_argument("--freeze-backbone-bn", action=argparse.BooleanOptionalAction, default=True)
@@ -77,6 +78,7 @@ def train(args):
         selected = 'mpm' if legacy is None else ('adpm' if legacy else 'cfb')
     model_config = dict(num_classes=args.num_classes + 1, width=args.width, freeze_backbone_bn=args.freeze_backbone_bn,
                         use_adpm=selected == "adpm", cssp_module=selected,
+                        mpm_variant=getattr(args, "mpm_variant", "5531"),
                         use_dynamic_fusion=getattr(args, "dynamic_fusion", True))
     training_config = {key: getattr(args, key) for key in (
         "epochs", "batch_size", "workers", "lr", "weight_decay", "dice_weight",

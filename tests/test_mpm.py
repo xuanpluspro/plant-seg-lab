@@ -9,7 +9,7 @@ from utils.runtime import FORMAT, load_model, normalize_model_config
 from train_medical import parse_args
 
 
-class OfficialMPM(unittest.TestCase):
+class MPMContracts(unittest.TestCase):
     def test_shapes_branch_sharing_and_gradients(self):
         torch.set_num_threads(2)
         model = MPM(32)
@@ -25,6 +25,9 @@ class OfficialMPM(unittest.TestCase):
         self.assertEqual(cam,[x.shape])
         self.assertEqual(y.shape,x.shape)
         self.assertEqual(model.Conv_7[0].groups,1)
+        self.assertEqual(model.Conv_7[0].kernel_size,(5,5))
+        self.assertEqual(model.Conv_5[0].kernel_size,(3,3))
+        self.assertEqual(model.Conv_3[0].kernel_size,(1,1))
         self.assertEqual(model.Conv.act.weight.shape,(32,1,7,7))
         y.square().mean().backward()
         self.assertTrue(torch.isfinite(x.grad).all())
@@ -50,3 +53,15 @@ class OfficialMPM(unittest.TestCase):
                 self.assertEqual(parse_args().cssp_module,want)
         with patch('sys.argv',['train_medical.py','--from-scratch','--adpm']):
             self.assertTrue(parse_args().adpm)
+
+    def test_original_7753_checkpoint_without_variant(self):
+        model=OSSSeg(width=16,mpm_variant='7753').eval()
+        config=dict(model.model_config);config.pop('mpm_variant')
+        x=torch.randn(1,3,64,96)
+        with torch.no_grad(): expected=model(x)
+        with tempfile.TemporaryDirectory() as d:
+            path=Path(d)/'legacy.pth'
+            torch.save(dict(format=FORMAT,model_config=config,model=model.state_dict()),path)
+            restored,_=load_model(path,torch.device('cpu'))
+            self.assertEqual(restored.cfb.kernel_variant,'7753')
+            with torch.no_grad(): torch.testing.assert_close(expected,restored(x),rtol=0,atol=0)
