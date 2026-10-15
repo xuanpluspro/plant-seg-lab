@@ -1,7 +1,7 @@
 """RGB plant segmentation adapted from MODA/OSSDet, not its detection model.
 
-forward(x) -> logits [B,2,H,W]; forward(x, return_aux=True) -> dict.
-Class 0 = background, class 1 = plant. Core modules are attributed in README.
+forward(x) -> logits [B,K,H,W]; forward(x, return_aux=True) -> dict.
+Class 0 = background; classes 1..K-1 = foreground. Core modules are attributed in README.
 """
 from pathlib import Path
 import torch
@@ -25,11 +25,11 @@ class OSSSeg(nn.Module):
     def __init__(self, num_classes=2, width=256, freeze_backbone_bn=True,
                  use_adpm=True, use_dynamic_fusion=True):
         super().__init__()
-        if num_classes != 2:
-            raise ValueError("OSSSeg is configured for background/plant (2 classes)")
+        if not 2 <= num_classes <= 256:
+            raise ValueError("num_classes must include background and be in 2..256")
         if width < 8 or width % 8:
             raise ValueError("width must be a positive multiple of 8")
-        self.model_config = dict(num_classes=2, width=width,
+        self.model_config = dict(num_classes=num_classes, width=width,
                                  freeze_backbone_bn=freeze_backbone_bn,
                                  use_adpm=use_adpm, use_dynamic_fusion=use_dynamic_fusion)
         self.freeze_backbone_bn = freeze_backbone_bn
@@ -49,7 +49,7 @@ class OSSSeg(nn.Module):
         # Segmentation-specific decoder; no rotated boxes or NMS.
         self.decoder = nn.Sequential(conv_block(width * 4, width), conv_block(width, 64))
         self.detail = nn.Sequential(conv_block(3, 32), conv_block(32, 32))
-        self.segmentation_head = nn.Sequential(conv_block(96, 64), nn.Conv2d(64, 2, 1))
+        self.segmentation_head = nn.Sequential(conv_block(96, 64), nn.Conv2d(64, num_classes, 1))
 
     def load_backbone(self, path):
         """Strict local torchvision ResNet-50 weights; ignore only the ImageNet fc."""

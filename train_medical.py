@@ -1,6 +1,8 @@
-"""Train OSSSeg on 512px VOC-layout binary plant masks; select by validation plant IoU."""
+"""Train plant-seg-lab on 512px binary or multiclass VOC masks."""
 import argparse
 import json
+import csv
+from time import perf_counter
 from pathlib import Path
 import torch
 from torch.utils.data import DataLoader
@@ -17,16 +19,17 @@ def parse_args():
     p.add_argument("--data-path", default="VOCdevkit")
     p.add_argument("--output", default="run/train/ossseg")
     init = p.add_mutually_exclusive_group()
-    init.add_argument("--backbone-weights", help="Local torchvision ResNet-50 weights; default: pretrained/resnet50.pth")
+    init.add_argument("--backbone-weights", help="Local torchvision ResNet-50 ImageNet weights")
     init.add_argument("--from-scratch", action="store_true", help="Explicitly train without pretraining")
     init.add_argument("--resume", help="Resume this project's last.pth with optimizer/RNG state")
-    p.add_argument("--num-classes", type=int, default=1, help="Foreground classes excluding background; must be 1")
-    p.add_argument("--width", type=int, default=256)
+    p.add_argument("--num-classes", type=int, default=1, help="Foreground class count excluding background: 1 for binary, 4 for IDs 0..4")
+    p.add_argument("--mask-encoding", choices=["auto", "binary255", "index"], default="auto")
     p.add_argument("--adpm", action=argparse.BooleanOptionalAction, default=True)
     p.add_argument("--dynamic-fusion", action=argparse.BooleanOptionalAction, default=True)
+    p.add_argument("--width", type=int, default=256)
     p.add_argument("--freeze-backbone-bn", action=argparse.BooleanOptionalAction, default=True)
-    p.add_argument("--epochs", type=int, default=100)
-    p.add_argument("--batch-size", type=int, default=2)
+    p.add_argument("--epochs", type=int, default=30)
+    p.add_argument("--batch-size", type=int, default=32)
     p.add_argument("--workers", type=int, default=0)
     p.add_argument("--lr", type=float, default=1e-4)
     p.add_argument("--weight-decay", type=float, default=1e-4)
@@ -53,17 +56,18 @@ def resolve_initialization(args):
 
 def train(args):
     resolve_initialization(args)
-    if args.num_classes != 1 or args.epochs < 1 or args.batch_size < 1 or args.workers < 0:
-        raise ValueError("Require 1 foreground class, positive epochs/batch-size, nonnegative workers")
+    if not 1 <= args.num_classes <= 255 or args.epochs < 1 or args.batch_size < 1 or args.workers < 0:
+        raise ValueError("Require 1..255 foreground classes, positive epochs/batch-size, nonnegative workers")
     if args.lr <= 0 or args.weight_decay < 0:
         raise ValueError("Invalid optimizer settings")
     if getattr(args, "benchmark_warmup", 50) < 0 or getattr(args, "benchmark_iterations", 200) < 1:
-        raise ValueError("Require nonnegative benchmark warmup and positive iterations")
+        raise ValueError("Invalid benchmark repetitions")
     seed_everything(args.seed)
     device = resolve_device(args.device)
     root = voc_root(args.data_path)
     splits = validate_splits(root)
-    model_config = dict(num_classes=2, width=args.width, freeze_backbone_bn=args.freeze_backbone_bn,
+    data_config = dict(num_classes=args.num_classes + 1, mask_encoding=getattr(args, "mask_encoding", "auto"))
+    model_config = dict(num_classes=args.num_classes + 1, width=args.width, freeze_backbone_bn=args.freeze_backbone_bn,
                         use_adpm=getattr(args, "adpm", True),
                         use_dynamic_fusion=getattr(args, "dynamic_fusion", True))
     training_config = {key: getattr(args, key) for key in (
@@ -78,9 +82,9 @@ def train(args):
     generator = torch.Generator().manual_seed(args.seed)
     loader_kwargs = dict(batch_size=args.batch_size, num_workers=args.workers,
                          pin_memory=device.type == "cuda", worker_init_fn=seed_worker)
-    train_loader = DataLoader(PlantVOCDataset(root, "train", augmentation=True),
+    train_loader = DataLoader(PlantVOCDataset(root, "train", augmentation=True, **data_config),
                               shuffle=True, generator=generator, **loader_kwargs)
-    val_loader = DataLoader(PlantVOCDataset(root, "val", augmentation=False),
+    val_loader = DataLoader(PlantVOCDataset(root, "val", augmentation=False, **data_config),
                             shuffle=False, **loader_kwargs)
     model = OSSSeg(**model_config)
     initialization = args.backbone_weights or "random"
@@ -97,10 +101,11 @@ def train(args):
     start, best, history = 0, -1., []
     if args.resume:
         checkpoint = read_checkpoint(args.resume)
+        saved_data = checkpoint.get("data_config", dict(num_classes=2, mask_encoding="binary255"))
         saved_config = dict(checkpoint["model_config"])
         saved_config.setdefault("use_adpm", False)
         saved_config.setdefault("use_dynamic_fusion", False)
-        if (saved_config != model_config
+        if (saved_data != data_config or saved_config != model_config
                 or checkpoint["training_config"] != training_config
                 or checkpoint["splits"] != splits):
             raise ValueError("Resume requires identical model/training settings and split IDs, including total epochs")
@@ -114,24 +119,29 @@ def train(args):
         history = checkpoint["history"]
         initialization = checkpoint["initialization"]
     config = dict(model=model_config, training=training_config, initialization=initialization,
-                  data_path=str(root.resolve()), raw_labels={"background": 0, "plant": 255})
+                  data_path=str(root.resolve()), data=data_config)
     (output / "config.json").write_text(json.dumps(config, indent=2), encoding="utf-8")
     (output / "splits.json").write_text(json.dumps(splits, indent=2), encoding="utf-8")
     print(f"device={device}; train={len(train_loader.dataset)} val={len(val_loader.dataset)}; params={sum(p.numel() for p in model.parameters()):,}", flush=True)
     for epoch in range(start, args.epochs):
-        loss = train_one_epoch(model, optimizer, train_loader, device, criterion, scaler)
-        metrics = evaluate(model, val_loader, device, criterion)
-        score = metrics["Foreground IoU"]
+        begin = perf_counter()
+        loss = train_one_epoch(model, optimizer, train_loader, device, criterion, scaler,
+                               desc=f"Epoch {epoch+1}/{args.epochs} Train")
+        metrics = evaluate(model, val_loader, device, criterion,
+                           desc=f"Epoch {epoch+1}/{args.epochs} Val")
+        selection_metric = "Foreground IoU" if args.num_classes == 1 else "Mean IoU"
+        score = metrics[selection_metric]
         if score is None:
-            raise ValueError("Undefined validation plant IoU; no plant pixels in labels or predictions")
+            raise ValueError("Undefined validation selection metric; no plant pixels in labels or predictions")
         improved = score > best
         best = max(best, score)
-        history.append(dict(epoch=epoch + 1, train_loss=loss,
+        history.append(dict(epoch=epoch + 1, train_loss=loss, seconds=perf_counter()-begin,
                             lr=optimizer.param_groups[0]["lr"], **metrics))
         scheduler.step()
         checkpoint = dict(
             format=FORMAT, model_config=model_config, training_config=training_config,
-            initialization=initialization, splits=splits, epoch=epoch, best_foreground_iou=best,
+            initialization=initialization, splits=splits, data_config=data_config, epoch=epoch, best_foreground_iou=best,
+            selection_metric=selection_metric, best_score=best,
             model=model.state_dict(), optimizer=optimizer.state_dict(),
             scheduler=scheduler.state_dict(), scaler=scaler.state_dict(),
             rng=rng_state(generator), history=history)
@@ -139,7 +149,14 @@ def train(args):
             save_checkpoint(checkpoint, output / "best.pth")
         save_checkpoint(checkpoint, output / "last.pth")
         (output / "history.json").write_text(json.dumps(history, indent=2, allow_nan=False), encoding="utf-8")
-        print(json.dumps(history[-1], allow_nan=False), flush=True)
+        with (output / "history.csv").open("w", newline="", encoding="utf-8-sig") as stream:
+            fields = list(dict.fromkeys(k for h in history for k, v in h.items() if not isinstance(v, (list, dict))))
+            writer = csv.DictWriter(stream, fieldnames=fields, extrasaction="ignore")
+            writer.writeheader()
+            writer.writerows(history)
+        print(f"Epoch {epoch+1}/{args.epochs} | loss={loss:.4f} | val loss={metrics['Loss']:.4f} | val mIoU={metrics['Mean IoU']:.4f} "
+              f"| Dice={metrics['Dice']:.4f} | best {selection_metric}={best:.4f} "
+              f"| time={history[-1]['seconds']:.1f}s", flush=True)
     if history:
         from utils.results import export_final_results
         best_checkpoint = read_checkpoint(output / "best.pth")

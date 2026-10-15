@@ -27,7 +27,7 @@ def main():
         raise ValueError("Split IDs changed since training; use the same train/val/test lists")
     if args.split not in splits:
         raise FileNotFoundError(f"{args.split}.txt was not provided before training")
-    loader = DataLoader(PlantVOCDataset(root, args.split), batch_size=args.batch_size,
+    loader = DataLoader(PlantVOCDataset(root, args.split, **checkpoint.get("data_config", {})), batch_size=args.batch_size,
                         num_workers=args.workers, shuffle=False)
     metrics = evaluate(model, loader, device)
     metrics.update(split=args.split, checkpoint=args.weights, epoch=checkpoint["epoch"] + 1)

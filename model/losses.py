@@ -13,14 +13,22 @@ class SegmentationLoss(nn.Module):
 
     def forward(self, output, target):
         logits = output["logits"].float() if isinstance(output, dict) else output.float()
-        if target.dtype != torch.long or target.min() < 0 or target.max() > 1:
-            raise ValueError("Loss expects class indices 0=background, 1=plant")
+        if target.dtype != torch.long or target.min() < 0 or target.max() >= logits.shape[1]:
+            raise ValueError("Loss expects class IDs 0..K-1 with background=0")
         ce = F.cross_entropy(logits, target)
-        plant = target.float()
-        prob = logits.softmax(1)[:, 1]
-        intersection = (prob * plant).sum((1, 2))
-        denominator = (prob + plant).sum((1, 2))
-        dice = (1 - (2 * intersection + 1) / (denominator + 1)).mean()
+        plant = (target > 0).float()
+        probabilities = logits.softmax(1)
+        if logits.shape[1] == 2:
+            prob = probabilities[:, 1]
+            intersection = (prob * plant).sum((1, 2))
+            denominator = (prob + plant).sum((1, 2))
+            dice = (1 - (2 * intersection + 1) / (denominator + 1)).mean()
+        else:
+            truth = F.one_hot(target, logits.shape[1]).permute(0, 3, 1, 2).float()[:, 1:]
+            prob = probabilities[:, 1:]
+            intersection = (prob * truth).sum((2, 3))
+            denominator = (prob + truth).sum((2, 3))
+            dice = (1 - (2 * intersection + 1) / (denominator + 1)).mean()
         aux = logits.new_zeros(())
         if isinstance(output, dict) and output.get("aux_logits") is not None:
             auxiliary = F.interpolate(output["aux_logits"].float(),

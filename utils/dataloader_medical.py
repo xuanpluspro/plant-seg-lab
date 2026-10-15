@@ -63,7 +63,11 @@ def image_tensor(image):
     return (x - torch.tensor(MEAN)[:, None, None]) / torch.tensor(STD)[:, None, None]
 
 
-def decode_mask(path):
+def decode_mask(path, num_classes=2, mask_encoding="binary255"):
+    if not 2 <= num_classes <= 256:
+        raise ValueError("Require 2..256 total classes")
+    if mask_encoding not in ("auto", "binary255", "index"):
+        raise ValueError("Use auto, binary255 or index mask encoding")
     with Image.open(path) as image:
         mask = np.array(image)  # preserve indices of palette PNG, not displayed colors
     if mask.ndim == 3 and mask.shape[2] in (3, 4):
@@ -71,16 +75,30 @@ def decode_mask(path):
                 and np.array_equal(mask[..., 0], mask[..., 2])):
             raise ValueError(f"Colored mask requires explicit mapping: {path}")
         mask = mask[..., 0]
-    if mask.ndim != 2 or not set(np.unique(mask)).issubset({0, 255}):
-        raise ValueError(f"Mask must contain only 0=background / 255=plant: {path}")
-    return (mask == 255).astype(np.uint8)
+    if mask.ndim != 2:
+        raise ValueError(f"Expected a 2D mask: {path}")
+    values = set(np.unique(mask))
+    if mask_encoding == "binary255":
+        if num_classes != 2 or not values.issubset({0, 255}):
+            raise ValueError(f"binary255 requires two classes and only 0/255: {path}")
+        return (mask == 255).astype(np.uint8)
+    if mask_encoding == "auto" and num_classes == 2 and 255 in values:
+        if not values.issubset({0, 255}):
+            raise ValueError(f"Mixed 0/1/255 labels are ambiguous: {path}")
+        return (mask == 255).astype(np.uint8)
+    if not values.issubset(set(range(num_classes))):
+        raise ValueError(f"Expected class IDs 0..{num_classes-1}; got {sorted(values)}: {path}")
+    return mask.astype(np.uint8)
+
 
 
 class PlantVOCDataset(Dataset):
-    def __init__(self, data_path, split="train", augmentation=False):
+    def __init__(self, data_path, split="train", augmentation=False, num_classes=2, mask_encoding="binary255"):
         self.root = voc_root(data_path)
         self.ids = read_ids(self.root, split)
         self.augmentation = augmentation
+        self.num_classes = num_classes
+        self.mask_encoding = mask_encoding
         images = index_images(self.root)
         self.pairs = []
         for name in self.ids:
@@ -96,7 +114,7 @@ class PlantVOCDataset(Dataset):
         image_path, mask_path = self.pairs[index]
         with Image.open(image_path) as file:
             image = file.convert("RGB")
-        mask = decode_mask(mask_path)
+        mask = decode_mask(mask_path, self.num_classes, self.mask_encoding)
         if image.size != (IMAGE_SIZE, IMAGE_SIZE) or mask.shape != (IMAGE_SIZE, IMAGE_SIZE):
             raise ValueError(f"Expected 512x512 image AND mask: {image_path}, {mask_path}")
         label = Image.fromarray(mask)

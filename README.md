@@ -1,4 +1,4 @@
-# Plant Seg Lab：RGB 植物二分类语义分割
+# Plant Seg Lab：RGB 植物语义分割
 
 当前默认模型同时替换 CSSP/CFB 和三个 CAFR/FEM：**ADPM + 跨尺度动态调制**。这是待实验验证的候选结构，不宣称原创性或已提升精度。
 
@@ -6,13 +6,13 @@
 
 ## 模型
 
-RGB → ResNet-50四级特征 → 通道统一为256 → ADPM深层方向感知 → SSAF自顶向下融合 → 像素监督的植物前景引导 → 跨尺度动态调制自底向上精炼 → 新增多尺度分割解码器与RGB细节分支 → 两通道logits。
+RGB → ResNet-50四级特征 → 通道统一为256 → ADPM深层方向感知 → SSAF自顶向下融合 → 像素监督的植物前景引导 → 跨尺度动态调制自底向上精炼 → 新增多尺度分割解码器与RGB细节分支 → K通道logits（默认二分类）。
 
 - model/ossseg.py：总体网络。默认 ResNet-50，新增分割部分用GroupNorm。
 - model/adpm.py：替换CSSP/CFB，1×1降通道→3×3、1×7、7×1深度卷积→逐位置softmax分支选择→投影与残差。
 - model/dynamic_fusion.py：替换三个CAFR/FEM，相邻层对齐→联合特征与归一化差异生成空间仿射参数→细化与深层残差。细化保留Conv/GroupNorm/ReLU、深度可分离卷积、SE。
 - model/cfb.py、ssaf.py、fem.py：保留官方特征模块，CFB/FEM供消融基线使用，SSAF仍在默认模型中使用。
-- model/losses.py：交叉熵 + 前景Dice + 0.2×辅助前景BCE。
+- model/losses.py：K类交叉熵 + 前景类别Dice + 0.2×辅助前景并集BCE。
 - model/README.md：原始模块与改造部分的区别、来源与许可证。
 
 512输入时ADPM在16×16特征上处理；三个动态调制模块输出64×64、32×32、16×16。骨干保留RGB输入，不能产生RGB没有的近红外等信息。三个特征交互模块在AMP中以FP32执行以保护相关性/距离计算；骨干及分割头仍可混合精度运行。
@@ -50,13 +50,13 @@ cd plant-seg-lab
 pip install -r requirements.txt
 python check_data.py --data-path data/VegAnn
 python download_pretrained.py
-python train_medical.py --data-path data/VegAnn --epochs 30 --batch-size 2 --workers 4 --output run/train/adpm_dynamic
+python train_medical.py --data-path data/VegAnn --epochs 30 --batch-size 32 --workers 4 --output run/train/adpm_dynamic
 ```
 
-先以batch-size=2检查真实GPU显存，再提高批大小；尚未验证32GB GPU能承受的最大批大小。
+默认batch-size=32、epochs=30；实际显存不足时降低batch-size。
 本地ResNet权重可用 `--backbone-weights model/weights/resnet50.pth` 替代 `--from-scratch`。
 数据放在data/下且不提交Git；**当前实际读取的是ImageSets/Segmentation，不是Main**。
-当前掩膜编码依然要求0/255，不会自动把0/1猜作同一数据。
+标签支持0/255、0/1二分类，以及连续类别编号的多分类，参数见下方。
 
 ## 安装
 
@@ -67,7 +67,7 @@ pip install -r requirements.txt
 python -c "import torch, torchvision; print(torch.__version__, torchvision.__version__, torch.cuda.is_available())"
 ~~~
 
-CPU测试工作流使用Python3.11、torch2.5.1、torchvision0.20.1；具体运行结果见GitHub Actions。代码支持CPU/CUDA，默认device=auto。单卡起始batch-size=2，显存不足先减为1。改变width会改变实验模型容量，默认256。
+CPU测试工作流使用Python3.11、torch2.5.1、torchvision0.20.1；具体运行结果见GitHub Actions。代码支持CPU/CUDA，默认device=auto。默认batch-size=32，显存不足可降低。改变width会改变实验模型容量，默认256。
 
 ## VOC2012 数据
 
@@ -83,7 +83,15 @@ CPU测试工作流使用Python3.11、torch2.5.1、torchvision0.20.1；具体运�
 
 每行一个同名主干，不带扩展名。图片与掩膜必须都是512×512；程序不悄悄改变尺寸。--data-path接受VOCdevkit或VOC2012路径。不会自行划分；trainval.txt不能当作独立验证集。如果目前只有trainval，先依据真实划分整理为互不重叠的train/val/test。
 
-**磁盘掩膜采用0背景、255植物；读取后转为0背景、1植物。**0/255更易查看，0/1适合交叉熵训练，两者不影响模型精度，只要映射一致。255在这里是植物，不是标准多类VOC中的void。此工程采用VOC目录布局，不采用其21类标签语义。0/1磁盘掩膜需先明确转换，不会自动猜测；彩色可视化也不能作为标签输入。
+**背景为0，保留P模式PNG类别索引，不把显示颜色当作类别。**
+
+| 原始标签 | 训练和check_data参数 |
+|---|---|
+| 0、255 | `--mask-encoding binary255 --num-classes 1` |
+| 0、1 | `--mask-encoding index --num-classes 1` |
+| 0、1、2、3、4 | `--mask-encoding index --num-classes 4` |
+
+`--num-classes`是**不含背景**的类别数。默认`auto`在二分类接受0/1或0/255，多分类保留索引，越界报错。不支持ignore标签；255在binary255中表示前景，不是VOC的void。彩色可视化标签需先转类别索引。
 
 ~~~bash
 python check_data.py --data-path VOCdevkit
@@ -117,12 +125,12 @@ python train_medical.py --data-path VOCdevkit --from-scratch --batch-size 2 --ep
 python train_medical.py --data-path VOCdevkit --resume run/train/ossseg/last.pth --batch-size 2 --epochs 100 --output run/train/ossseg
 ~~~
 
-恢复保留原总epochs及其他训练/模型参数，恢复优化器、调度器、AMP与随机状态。不要把--epochs改为剩余轮数。--output须为原运行目录；新实验不能覆盖非空目录。支持--amp/--no-amp，CPU自动禁用AMP。--num-classes沿用旧命令的“前景类别数”含义，固定为1，模型输出2通道。
+恢复保留原总epochs及其他训练/模型参数，恢复优化器、调度器、AMP与随机状态。不要把--epochs改为剩余轮数。--output须为原运行目录；新实验不能覆盖非空目录。支持--amp/--no-amp，CPU自动禁用AMP。--num-classes沿用旧命令的“前景类别数”含义，二分类填1，五分类填4；模型输出通道包含背景。恢复本次升级前的checkpoint还需加`--mask-encoding binary255`，原有消融开关和训练参数保持一致。
 
 输出：
-- best.pth：验证集**Foreground IoU**最高的checkpoint。
+- best.pth：二分类按验证集**Foreground IoU**、多分类按验证集**Mean IoU**最高保存。
 - last.pth：末轮checkpoint，含完整恢复状态。
-- config.json、splits.json、history.json：参数、划分和指标记录。
+- config.json、splits.json、history.json、history.csv：参数、划分、逐轮指标、学习率和耗时记录。训练和验证均显示tqdm进度条。
 - loss_curve.png、metrics_curve.png：沿用模板绘图。
 
 跨硬件/版本不保证完全一致。划分记录校验ID，不对图像内容做哈希；不要在训练后替换样本。
@@ -137,7 +145,7 @@ python predict.py --data-path VOCdevkit/VOC2012/JPEGImages --weights run/train/o
 
 评估读取checkpoint自带的结构，检查划分与训练时一致。按全数据集混淆矩阵计算前景IoU、背景IoU、mIoU、Dice、Precision、Recall等，不再逐batch简单平均。无定义的指标输出null；mIoU纳入union>0的类。test不用于选择best。
 
-predict输出原尺寸512×512的 *_mask.png（0/255）、*_prob.npy（植物概率）和 *_overlay.png。阈值固定0.5，平局选背景。输出目录须为空，以免覆盖已有预测。当前不包含大图滑窗和实例计数。
+predict输出512×512的 *_mask.png、*_prob.npy和 *_overlay.png。二分类默认0/255与H×W前景概率，可用`--mask-output-encoding index`导出0/1；二分类阈值等效0.5，平局选背景。多分类用argmax，PNG保留0..K-1，概率为K×H×W。输出目录须为空，以免覆盖已有预测。当前不包含大图滑窗和实例计数。
 
 ## 以后怎样替换模型
 
@@ -224,7 +232,8 @@ python train_medical.py --data-path data/VOC2012 --epochs 30 --batch-size 32 --w
 | 文件 | 内容 |
 |---|---|
 | metrics.json | 最佳epoch、验证/测试精度、模型参数和benchmark汇总 |
-| results.csv | 验证/测试各一行，可用Excel打开；精度数值为0~1 |
+| results.csv | 验证/测试各一行，可用Excel打开；区域指标0~1，HD95/ASSD单位为像素 |
+| class_metrics.csv | 每类IoU、Accuracy、Dice、Precision、Recall和真实像素数 |
 | benchmark.json | 参数量、完整性标记、部分/完整GFLOPs及GPU FPS/延迟 |
 
 终端也会打印最终前景IoU、mIoU、Dice、Precision、Recall和PixAcc。
@@ -240,3 +249,21 @@ python summarize.py --data-path data/VOC2012 --weights run/train/riceseg_pretrai
 
 数据划分必须与checkpoint登记的train/val/test完全相同。输出默认位于权重目录；
 `--output run/report/riceseg`可生成到另一目录，不修改权重文件。
+
+
+## 与参考基准的指标口径
+
+参考[vegann-seg-benchmark](https://github.com/xuanpluspro/vegann-seg-benchmark)，区域指标累计整个数据集混淆矩阵；新增Specificity、HD95、ASSD和Boundary F1。边界指标逐图平均，容差固定2像素；双方前景为空时距离0/F1为1，单方为空时距离为图像对角线/F1为0。模型训练仍采用本项目的CE+Dice+辅助BCE，不直接替换成参考仓库的单通道BCE。
+
+多分类Dice/Precision/Recall是前景类别宏平均，mIoU包含背景；Foreground IoU和边界指标衡量所有非背景类别并集，需同时查看逐类IoU以判断类别混淆。无定义区域分数输出null，宏平均排除未定义项；这一空类别约定与参考仓库的返回1约定不同。metric_units和aggregation记录单位与汇总方法，metric_scale的0-1仅适用于比例指标。
+
+训练结束自动用best.pth评估val/test并输出结果，测试集不参与选模。新checkpoint记录类别数、编码和模块开关，验证/预测/汇总自动复用；旧checkpoint仍可加载，缺少标签配置时按0/255二分类处理。已有模型可用summarize.py重新生成新增指标，无需重训。历史训练指标不会追溯补算。
+
+当前0/1数据集示例：
+
+```bash
+python check_data.py --data-path data/VOC201201 --mask-encoding index --num-classes 1
+python train_medical.py --data-path data/VOC201201 --mask-encoding index --num-classes 1 --backbone-weights pretrained/resnet50.pth --batch-size 32 --epochs 30 --output run/train/vegann01_pretrained_bs32_ep30
+```
+
+保持512×512图像与掩码；本次没有添加隐式缩放。所有对比实验应统一划分、预训练来源、标签语义、尺寸和统计口径。真实CUDA精度与性能需在AutoDL验证。
