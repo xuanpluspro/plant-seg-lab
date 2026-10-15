@@ -4,7 +4,6 @@ import unittest
 from pathlib import Path
 import torch
 from model import OSSSeg
-from model.adpm import AdaptiveDirectionalPerception
 from model.dynamic_fusion import CrossScaleDynamicModulation
 from utils.runtime import FORMAT, load_model
 
@@ -12,19 +11,6 @@ torch.set_num_threads(2)
 
 
 class Replacements(unittest.TestCase):
-    def test_directional_selection_and_gradients(self):
-        m = AdaptiveDirectionalPerception(16)
-        x = torch.randn(2, 16, 8, 12, requires_grad=True)
-        weights = []
-        handle = m.selector.register_forward_hook(lambda _, ins, out: weights.append(out.softmax(1)))
-        y = m(x)
-        handle.remove()
-        torch.testing.assert_close(weights[0].sum(1), torch.ones(2, 8, 12))
-        self.assertEqual(y.shape, x.shape)
-        y.square().mean().backward()
-        self.assertTrue(all(p.grad is not None and torch.isfinite(p.grad).all() for p in m.parameters()))
-        self.assertGreater(m.selector[-1].weight.grad.abs().sum().item(), 0)
-
     def test_three_scales_affine_and_deep_residual(self):
         for h, w in [(64, 96), (32, 48), (16, 24)]:
             m = CrossScaleDynamicModulation(16)
@@ -43,15 +29,12 @@ class Replacements(unittest.TestCase):
             self.assertGreater(high.grad.abs().sum().item(), 0)
             self.assertTrue(all(p.grad is not None and torch.isfinite(p.grad).all() for p in m.parameters()))
 
-    def test_ablation_modes_checkpoint_and_legacy(self):
+    def test_dynamic_fusion_modes_checkpoint(self):
         x = torch.randn(1, 3, 64, 96)
-        for adpm, fusion in [(False, False), (True, False), (False, True), (True, True)]:
-            m = OSSSeg(width=16, use_adpm=adpm, use_dynamic_fusion=fusion).eval()
+        for fusion in (False, True):
+            m = OSSSeg(width=16, use_dynamic_fusion=fusion).eval()
             with torch.no_grad(): expected = m(x)
             config = dict(m.model_config)
-            config.pop("cssp_module")  # simulate pre-MPM checkpoints
-            if not adpm and not fusion:
-                config.pop('use_adpm'); config.pop('use_dynamic_fusion')
             with tempfile.TemporaryDirectory() as d:
                 p = Path(d) / 'model.pth'
                 torch.save(dict(format=FORMAT, model_config=config, model=m.state_dict()), p)

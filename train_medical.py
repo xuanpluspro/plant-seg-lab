@@ -11,7 +11,7 @@ from model.losses import SegmentationLoss
 from utils.dataloader_medical import PlantVOCDataset, voc_root, validate_splits
 from utils.train_and_eval import train_one_epoch, evaluate
 from utils.runtime import (FORMAT, seed_everything, seed_worker, resolve_device,
-                           save_checkpoint, read_checkpoint, rng_state, restore_rng, normalize_model_config)
+                           save_checkpoint, read_checkpoint, rng_state, restore_rng)
 
 
 def parse_args():
@@ -24,12 +24,6 @@ def parse_args():
     init.add_argument("--resume", help="Resume this project's last.pth with optimizer/RNG state")
     p.add_argument("--num-classes", type=int, default=1, help="Foreground class count excluding background: 1 for binary, 4 for IDs 0..4")
     p.add_argument("--mask-encoding", choices=["auto", "binary255", "index"], default="auto")
-    cssp = p.add_mutually_exclusive_group()
-    cssp.add_argument("--cssp-module", choices=("mpm", "adpm", "cfb"), default=None,
-                      help="CSSP replacement; default mpm (official MPCNet)")
-    cssp.add_argument("--adpm", action=argparse.BooleanOptionalAction, default=None,
-                      help="Legacy: --adpm selects ADPM; --no-adpm selects CFB")
-    p.add_argument("--mpm-variant", choices=("5531", "7753"), default="5531")
     p.add_argument("--dynamic-fusion", action=argparse.BooleanOptionalAction, default=True)
     p.add_argument("--width", type=int, default=256)
     p.add_argument("--freeze-backbone-bn", action=argparse.BooleanOptionalAction, default=True)
@@ -72,13 +66,7 @@ def train(args):
     root = voc_root(args.data_path)
     splits = validate_splits(root)
     data_config = dict(num_classes=args.num_classes + 1, mask_encoding=getattr(args, "mask_encoding", "auto"))
-    selected = getattr(args, "cssp_module", None)
-    legacy = getattr(args, "adpm", None)
-    if selected is None:
-        selected = 'mpm' if legacy is None else ('adpm' if legacy else 'cfb')
     model_config = dict(num_classes=args.num_classes + 1, width=args.width, freeze_backbone_bn=args.freeze_backbone_bn,
-                        use_adpm=selected == "adpm", cssp_module=selected,
-                        mpm_variant=getattr(args, "mpm_variant", "5531"),
                         use_dynamic_fusion=getattr(args, "dynamic_fusion", True))
     training_config = {key: getattr(args, key) for key in (
         "epochs", "batch_size", "workers", "lr", "weight_decay", "dice_weight",
@@ -112,7 +100,7 @@ def train(args):
     if args.resume:
         checkpoint = read_checkpoint(args.resume)
         saved_data = checkpoint.get("data_config", dict(num_classes=2, mask_encoding="binary255"))
-        saved_config = normalize_model_config(checkpoint["model_config"])
+        saved_config = checkpoint["model_config"]
         if (saved_data != data_config or saved_config != model_config
                 or checkpoint["training_config"] != training_config
                 or checkpoint["splits"] != splits):

@@ -5,7 +5,7 @@ from unittest.mock import patch
 import torch
 from model import OSSSeg
 from model.mpm import MPM
-from utils.runtime import FORMAT, load_model, normalize_model_config
+from utils.runtime import FORMAT, load_model
 from train_medical import parse_args
 
 
@@ -14,7 +14,7 @@ class MPMContracts(unittest.TestCase):
         torch.set_num_threads(2)
         model = MPM(32)
         inputs, fused, cam = [], [], []
-        handles = [model.Conv_7.register_forward_hook(lambda m,i,o: inputs.append(i[0].shape)),
+        handles = [model.conv5.register_forward_hook(lambda m,i,o: inputs.append(i[0].shape)),
                    model.Conv.register_forward_pre_hook(lambda m,i: fused.append(i[0].shape)),
                    model.ca.register_forward_pre_hook(lambda m,i: cam.append(i[0].shape))]
         x = torch.randn(2,32,16,24,requires_grad=True)
@@ -24,19 +24,18 @@ class MPMContracts(unittest.TestCase):
         self.assertEqual(fused,[torch.Size([2,64,16,24])])
         self.assertEqual(cam,[x.shape])
         self.assertEqual(y.shape,x.shape)
-        self.assertEqual(model.Conv_7[0].groups,1)
-        self.assertEqual(model.Conv_7[0].kernel_size,(5,5))
-        self.assertEqual(model.Conv_5[0].kernel_size,(3,3))
-        self.assertEqual(model.Conv_3[0].kernel_size,(1,1))
+        self.assertEqual(model.conv5[0].groups,1)
+        self.assertEqual(model.conv5[0].kernel_size,(5,5))
+        self.assertEqual(model.conv3[0].kernel_size,(3,3))
+        self.assertEqual(model.conv1[0].kernel_size,(1,1))
         self.assertEqual(model.Conv.act.weight.shape,(32,1,7,7))
         y.square().mean().backward()
         self.assertTrue(torch.isfinite(x.grad).all())
         self.assertTrue(all(p.grad is not None and torch.isfinite(p.grad).all() for p in model.parameters()))
 
-    def test_default_checkpoint_and_legacy_selection(self):
+    def test_default_checkpoint(self):
         model = OSSSeg(width=16).eval()
-        self.assertIsInstance(model.cfb,MPM)
-        self.assertEqual(model.model_config['cssp_module'],'mpm')
+        self.assertIsInstance(model.mpm,MPM)
         x = torch.randn(1,3,64,96)
         with torch.no_grad(): expected = model(x)
         with tempfile.TemporaryDirectory() as d:
@@ -44,24 +43,10 @@ class MPMContracts(unittest.TestCase):
             torch.save(dict(format=FORMAT,model_config=model.model_config,model=model.state_dict()),path)
             restored,_=load_model(path,torch.device('cpu'))
             with torch.no_grad(): torch.testing.assert_close(expected,restored(x),rtol=0,atol=0)
-        for old,expected_module in [({},'cfb'),({'use_adpm':True},'adpm'),({'use_adpm':False},'cfb')]:
-            self.assertEqual(normalize_model_config(old)['cssp_module'],expected_module)
 
-    def test_cli_default_and_explicit_ablation(self):
-        for options,want in [([],None),(['--cssp-module','mpm'],'mpm'),(['--cssp-module','adpm'],'adpm')]:
-            with patch('sys.argv',['train_medical.py','--from-scratch']+options):
-                self.assertEqual(parse_args().cssp_module,want)
-        with patch('sys.argv',['train_medical.py','--from-scratch','--adpm']):
-            self.assertTrue(parse_args().adpm)
-
-    def test_original_7753_checkpoint_without_variant(self):
-        model=OSSSeg(width=16,mpm_variant='7753').eval()
-        config=dict(model.model_config);config.pop('mpm_variant')
-        x=torch.randn(1,3,64,96)
-        with torch.no_grad(): expected=model(x)
-        with tempfile.TemporaryDirectory() as d:
-            path=Path(d)/'legacy.pth'
-            torch.save(dict(format=FORMAT,model_config=config,model=model.state_dict()),path)
-            restored,_=load_model(path,torch.device('cpu'))
-            self.assertEqual(restored.cfb.kernel_variant,'7753')
-            with torch.no_grad(): torch.testing.assert_close(expected,restored(x),rtol=0,atol=0)
+    def test_cli_has_no_model_variants(self):
+        with patch('sys.argv',['train_medical.py','--from-scratch']):
+            args=parse_args()
+        self.assertFalse(hasattr(args,'cssp_module'))
+        self.assertFalse(hasattr(args,'mpm_variant'))
+        self.assertFalse(hasattr(args,'adpm'))

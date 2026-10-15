@@ -4,7 +4,7 @@ import numpy as np
 import torch
 from model import OSSSeg
 
-FORMAT = "ossseg_rgb_voc512_v1"
+FORMAT = "plant_seg_lab_mpm5531_v2"
 
 
 def seed_everything(seed):
@@ -44,23 +44,13 @@ def save_checkpoint(payload, path):
 def read_checkpoint(path):
     ckpt = torch.load(path, map_location="cpu", weights_only=True)
     if not isinstance(ckpt, dict) or ckpt.get("format") != FORMAT:
-        raise ValueError("Expected this project's OSSSeg checkpoint, not U-Net/OSSDet detection weights")
+        raise ValueError("Expected current MPM-5531 v2 checkpoint; start a new run for older model formats")
     return ckpt
-
-
-def normalize_model_config(config):
-    """Legacy checkpoints retain their original ADPM/CFB architecture."""
-    config = dict(config)
-    config.setdefault('use_adpm', False)
-    config.setdefault('use_dynamic_fusion', False)
-    config.setdefault('cssp_module', 'adpm' if config['use_adpm'] else 'cfb')
-    config.setdefault("mpm_variant", "7753" if config["cssp_module"] == "mpm" else "5531")
-    return config
 
 
 def load_model(path, device):
     checkpoint = read_checkpoint(path)
-    config = normalize_model_config(checkpoint["model_config"])
+    config = checkpoint["model_config"]
     model = OSSSeg(**config).to(device)
     model.load_state_dict(checkpoint["model"], strict=True)
     return model.eval(), checkpoint
