@@ -9,7 +9,7 @@ cfb.py、ssaf.py、fem.py从上游tools/my_module/原样复制。随附LICENSE.M
 |---|---|
 | 八波段ResNet-50 | 替换为torchvision RGB ResNet-50 |
 | 横向投影 | 用GroupNorm卷积重写 |
-| CFB、SSAF、FEM | 上游文件保留，默认以ADPM替换CFB、动态调制替换FEM；SSAF沿用。开关可恢复基线 |
+| CFB、SSAF、FEM | 上游文件保留，默认以官方MPM替换CFB（ADPM保留为旧实验选项）、动态调制替换FEM；SSAF沿用。开关可恢复基线 |
 | 框生成的目标图、ActivationLoss | 改为真实植物像素掩膜的BCE监督 |
 | 前景引导 | 保留F*(1+sigmoid(aux))残差加权 |
 | 旋转框头、额外检测尺度、NMS | 移除 |
@@ -33,3 +33,7 @@ cfb.py、ssaf.py、fem.py从上游tools/my_module/原样复制。随附LICENSE.M
   捷径改为深层表示。不是原版FAPM或其严格复现；原文未说明的细节是本工程选择。
 - 实验使用时需引用MODA、MPCNet与Dino U-Net，检索相关方法后再判断新颖性。
   CPU验证只检查工程和数值契约，不验证植物精度或GPU性能。
+
+## 当前默认CSSP替换
+
+mpm.py提取官方MPCNet的MPM和原始依赖，版本、共享卷积和融合层细节见[MPM_SOURCE.md](MPM_SOURCE.md)。ADPM不等同于官方MPM；未加入QKV注意力。

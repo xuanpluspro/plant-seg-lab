@@ -1,21 +1,22 @@
 # Plant Seg Lab：RGB 植物语义分割
 
-当前默认模型同时替换 CSSP/CFB 和三个 CAFR/FEM：**ADPM + 跨尺度动态调制**。这是待实验验证的候选结构，不宣称原创性或已提升精度。
+当前默认模型同时替换 CSSP/CFB 和三个 CAFR/FEM：**官方 MPM + 跨尺度动态调制**。这是待实验验证的候选结构，不宣称原创性或已提升精度。
 
 基于 [MODA/OSSDet](https://github.com/shuaihao-han/MODA) 的公开特征模块，替换本仓库原 ResNet50-U-Net。网络、模块及损失均在 model/，不依赖 MMRotate、MMDetection、MMCV。这是 OSSDet 衍生的 RGB 分割模型，不是原论文的八波段旋转框检测模型，原论文 mAP 不适用于它。
 
 ## 模型
 
-RGB → ResNet-50四级特征 → 通道统一为256 → ADPM深层方向感知 → SSAF自顶向下融合 → 像素监督的植物前景引导 → 跨尺度动态调制自底向上精炼 → 新增多尺度分割解码器与RGB细节分支 → K通道logits（默认二分类）。
+RGB → ResNet-50四级特征 → 通道统一为256 → MPM深层多尺度感知 → SSAF自顶向下融合 → 像素监督的植物前景引导 → 跨尺度动态调制自底向上精炼 → 新增多尺度分割解码器与RGB细节分支 → K通道logits（默认二分类）。
 
 - model/ossseg.py：总体网络。默认 ResNet-50，新增分割部分用GroupNorm。
-- model/adpm.py：替换CSSP/CFB，1×1降通道→3×3、1×7、7×1深度卷积→逐位置softmax分支选择→投影与残差。
+- model/mpm.py：官方MPCNet的MPM及依赖，默认替换CSSP/CFB；来源与固定版本见model/MPM_SOURCE.md。
+- model/adpm.py：保留旧候选用于消融，1×1降通道→3×3、1×7、7×1深度卷积→逐位置softmax分支选择→投影与残差。
 - model/dynamic_fusion.py：替换三个CAFR/FEM，相邻层对齐→联合特征与归一化差异生成空间仿射参数→细化与深层残差。细化保留Conv/GroupNorm/ReLU、深度可分离卷积、SE。
 - model/cfb.py、ssaf.py、fem.py：保留官方特征模块，CFB/FEM供消融基线使用，SSAF仍在默认模型中使用。
 - model/losses.py：K类交叉熵 + 前景类别Dice + 0.2×辅助前景并集BCE。
 - model/README.md：原始模块与改造部分的区别、来源与许可证。
 
-512输入时ADPM在16×16特征上处理；三个动态调制模块输出64×64、32×32、16×16。骨干保留RGB输入，不能产生RGB没有的近红外等信息。三个特征交互模块在AMP中以FP32执行以保护相关性/距离计算；骨干及分割头仍可混合精度运行。
+512输入时MPM在16×16特征上处理；三个动态调制模块输出64×64、32×32、16×16。骨干保留RGB输入，不能产生RGB没有的近红外等信息。三个特征交互模块在AMP中以FP32执行以保护相关性/距离计算；骨干及分割头仍可混合精度运行。
 
 
 ## 同时替换与消融
@@ -24,10 +25,11 @@ RGB → ResNet-50四级特征 → 通道统一为256 → ADPM深层方向感知 
 
 | 方案 | 训练参数 |
 |---|---|
-| 两者同时替换（默认） | `--adpm --dynamic-fusion` |
-| 原模型基线 | `--no-adpm --no-dynamic-fusion` |
-| 仅替换CSSP | `--adpm --no-dynamic-fusion` |
-| 仅替换CAFR | `--no-adpm --dynamic-fusion` |
+| 官方MPM＋动态调制（默认） | `--cssp-module mpm --dynamic-fusion` |
+| 原模型基线 | `--cssp-module cfb --no-dynamic-fusion` |
+| 仅使用官方MPM | `--cssp-module mpm --no-dynamic-fusion` |
+| 仅替换CAFR | `--cssp-module cfb --dynamic-fusion` |
+| 旧ADPM＋动态调制 | `--cssp-module adpm --dynamic-fusion` |
 
 ADPM输入输出均为 `[B,C,h,w]`，先投影到C/4通道，三个分支处理同一压缩特征。
 选择器输出 `[B,3,h,w]`，softmax沿分支轴，每个位置三个权重和为1，权重在通道间广播。
@@ -38,7 +40,7 @@ ADPM输入输出均为 `[B,C,h,w]`，先投影到C/4通道，三个分支处理�
 输出为 `T+Refine(M)`。新模块采用GroupNorm，避免小批量BN统计不稳。
 
 结构开关记录在checkpoint中，验证/预测自动恢复。旧checkpoint缺少开关时按旧模型加载；
-恢复旧训练需显式传 `--no-adpm --no-dynamic-fusion`。不能把旧完整模型checkpoint直接
+恢复原基线需显式传 `--cssp-module cfb --no-dynamic-fusion`；恢复ADPM实验使用`--cssp-module adpm`并保持原动态融合开关。不能把旧完整模型checkpoint直接
 恢复为新结构；新实验可使用相同ResNet骨干预训练权重，必须使用新的输出目录。
 
 ### AutoDL快速启动
@@ -50,7 +52,7 @@ cd plant-seg-lab
 pip install -r requirements.txt
 python check_data.py --data-path data/VegAnn
 python download_pretrained.py
-python train_medical.py --data-path data/VegAnn --epochs 30 --batch-size 32 --workers 4 --output run/train/adpm_dynamic
+python train_medical.py --data-path data/VegAnn --epochs 30 --batch-size 32 --workers 4 --output run/train/mpm_dynamic
 ```
 
 默认batch-size=32、epochs=30；实际显存不足时降低batch-size。
@@ -173,9 +175,9 @@ python -m unittest discover -s tests -v
 2026-10-14，PyTorch 2.5.1 CPU / torchvision 0.20.1：8项unittest通过（23.35秒），
 包括默认width=256的512×512前向/反向/重载，三个相邻尺度融合的有限梯度，
 四种消融配置及旧格式checkpoint加载，合成VOC训练/中断续训/测试/预测。
-默认双替换模型参数36,611,682，原基线33,715,104；保留完整细化路径使总参数增加约8.6%。
+当时的ADPM双替换模型参数36,611,682，原基线33,715,104；保留完整细化路径使总参数增加约8.6%。
 没有真实数据精度结果，CUDA/AMP尚未验证。docs/figures下旧结构图描述的是原基线，
-不代表当前ADPM+动态调制默认结构。
+不代表当前MPM+动态调制默认结构。
 
 ## 参数量、计算量与推理速度
 
@@ -267,3 +269,18 @@ python train_medical.py --data-path data/VOC201201 --mask-encoding index --num-c
 ```
 
 保持512×512图像与掩码；本次没有添加隐式缩放。所有对比实验应统一划分、预训练来源、标签语义、尺寸和统计口径。真实CUDA精度与性能需在AutoDL验证。
+
+
+## 官方MPM替换CSSP（当前默认）
+
+默认最深层为`model/mpm.py::MPM`，严格保留MPCNet官方代码的模块主体：通道四分、普通3/5/7卷积＋BN/ReLU、两路共用同一个Conv_7、四路结果与原输入拼接到2C、CBR融合回C、坐标注意力。CBR并非纯1×1卷积，其自定义activation包含ReLU、7×7深度卷积和BN；CAM采用h-swish，中间通道max(8,C//32)。输入输出均为[B,C,h,w]，512输入对应最深层[B,256,16,16]。未加额外MPM残差，未加入QKV。三个动态调制模块未改动。
+
+来源固定在上游commit `5024ea51e8abdf7bc40e36489041143c468b1fdf`，详见model/MPM_SOURCE.md。上游所需类原样提取，不引入检测模型或thop依赖。官方MPM使用BN，这些BN不属于ResNet骨干，因此不受freeze_backbone_bn影响，训练时会更新统计量。
+
+旧检查点验证/预测/汇总会根据配置加载原来的ADPM或CFB，不会自动替换为MPM。**MPM新实验应从相同ResNet预训练权重开始，不能resume旧ADPM完整权重**；输出采用新名称，避免混淆实验。类别与0/1、0/255编码、结果导出接口保持一致。
+
+```bash
+python train_medical.py --data-path data/VOC201201 --mask-encoding index --num-classes 1 --cssp-module mpm --backbone-weights pretrained/resnet50.pth --batch-size 32 --epochs 30 --workers 4 --device cuda --amp --output run/train/vegann01_mpm_dynamic_pretrained_bs32_ep30
+```
+
+旧`--adpm`与`--no-adpm`保留为兼容别名，分别选择adpm与cfb，不能与`--cssp-module`同时使用。当前默认MPM与ADPM的性能高低仍需真实数据实验，不预先宣称提升。

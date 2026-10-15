@@ -49,6 +49,7 @@ class Replacements(unittest.TestCase):
             m = OSSSeg(width=16, use_adpm=adpm, use_dynamic_fusion=fusion).eval()
             with torch.no_grad(): expected = m(x)
             config = dict(m.model_config)
+            config.pop("cssp_module")  # simulate pre-MPM checkpoints
             if not adpm and not fusion:
                 config.pop('use_adpm'); config.pop('use_dynamic_fusion')
             with tempfile.TemporaryDirectory() as d:

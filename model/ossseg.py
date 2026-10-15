@@ -12,6 +12,7 @@ from .cfb import CascadeFusionBlock
 from .ssaf import SpectralSpatialAdaptiveFusion
 from .fem import FeatureEnhancementModule
 from .adpm import AdaptiveDirectionalPerception
+from .mpm import MPM
 from .dynamic_fusion import CrossScaleDynamicModulation
 
 
@@ -23,15 +24,24 @@ def conv_block(cin, cout, kernel=3):
 
 class OSSSeg(nn.Module):
     def __init__(self, num_classes=2, width=256, freeze_backbone_bn=True,
-                 use_adpm=True, use_dynamic_fusion=True):
+                 use_adpm=None, use_dynamic_fusion=True, cssp_module=None):
         super().__init__()
         if not 2 <= num_classes <= 256:
             raise ValueError("num_classes must include background and be in 2..256")
         if width < 8 or width % 8:
             raise ValueError("width must be a positive multiple of 8")
+        if cssp_module is None:
+            cssp_module = 'mpm' if use_adpm is None else ('adpm' if use_adpm else 'cfb')
+        if cssp_module not in ('mpm', 'adpm', 'cfb'):
+            raise ValueError("cssp_module must be mpm, adpm or cfb")
+        if use_adpm is not None and (cssp_module == 'adpm') != use_adpm:
+            raise ValueError("Conflicting cssp_module and legacy use_adpm settings")
+        use_adpm = cssp_module == 'adpm'
+        self.cssp_module = cssp_module
         self.model_config = dict(num_classes=num_classes, width=width,
                                  freeze_backbone_bn=freeze_backbone_bn,
-                                 use_adpm=use_adpm, use_dynamic_fusion=use_dynamic_fusion)
+                                 use_adpm=use_adpm, use_dynamic_fusion=use_dynamic_fusion,
+                                 cssp_module=cssp_module)
         self.freeze_backbone_bn = freeze_backbone_bn
         # Never download weights in the constructor.
         self.backbone = resnet50(weights=None)
@@ -39,8 +49,8 @@ class OSSSeg(nn.Module):
         self.laterals = nn.ModuleList([
             conv_block(c, width, 1) for c in [256, 512, 1024, 2048]])
         self.use_adpm = use_adpm
-        self.cfb = (AdaptiveDirectionalPerception(width) if use_adpm
-                    else CascadeFusionBlock(width))
+        self.cfb = {'mpm': MPM, 'adpm': AdaptiveDirectionalPerception,
+                    'cfb': CascadeFusionBlock}[cssp_module](width)
         self.ssaf = nn.ModuleList([SpectralSpatialAdaptiveFusion(width) for _ in range(3)])
         fusion = CrossScaleDynamicModulation if use_dynamic_fusion else FeatureEnhancementModule
         self.fem = nn.ModuleList([fusion(width) for _ in range(3)])
@@ -87,7 +97,7 @@ class OSSSeg(nn.Module):
         # Only feature-interaction path is FP32; backbone and dense head can use AMP.
         with torch.autocast(device_type=image.device.type, enabled=False):
             xs = [t.float() for t in xs]
-            xs[-1] = (self.cfb(xs[-1]) if self.use_adpm
+            xs[-1] = (self.cfb(xs[-1]) if self.cssp_module != "cfb"
                       else self.cfb(xs[-1], xs[-1]))
             for i in range(2, -1, -1):
                 xs[i] = self.ssaf[i](xs[i + 1], xs[i])

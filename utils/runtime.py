@@ -48,12 +48,18 @@ def read_checkpoint(path):
     return ckpt
 
 
+def normalize_model_config(config):
+    """Legacy checkpoints retain their original ADPM/CFB architecture."""
+    config = dict(config)
+    config.setdefault('use_adpm', False)
+    config.setdefault('use_dynamic_fusion', False)
+    config.setdefault('cssp_module', 'adpm' if config['use_adpm'] else 'cfb')
+    return config
+
+
 def load_model(path, device):
     checkpoint = read_checkpoint(path)
-    config = dict(checkpoint["model_config"])
-    # Checkpoints predating module switches belong to the original baseline.
-    config.setdefault("use_adpm", False)
-    config.setdefault("use_dynamic_fusion", False)
+    config = normalize_model_config(checkpoint["model_config"])
     model = OSSSeg(**config).to(device)
     model.load_state_dict(checkpoint["model"], strict=True)
     return model.eval(), checkpoint
