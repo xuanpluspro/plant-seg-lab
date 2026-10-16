@@ -26,7 +26,8 @@ def parse_args():
     p.add_argument("--mask-encoding", choices=["auto", "binary255", "index"], default="auto")
     p.add_argument("--dynamic-fusion", action=argparse.BooleanOptionalAction, default=True)
     p.add_argument("--width", type=int, default=256)
-    p.add_argument("--freeze-backbone-bn", action=argparse.BooleanOptionalAction, default=True)
+    p.add_argument("--freeze-backbone-bn", action=argparse.BooleanOptionalAction, default=False,
+                   help="Freeze backbone BN running statistics (default: update during training)")
     p.add_argument("--epochs", type=int, default=30)
     p.add_argument("--batch-size", type=int, default=32)
     p.add_argument("--workers", type=int, default=0)

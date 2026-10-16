@@ -21,7 +21,7 @@ def conv_block(cin, cout, kernel=3):
 
 
 class OSSSeg(nn.Module):
-    def __init__(self, num_classes=2, width=256, freeze_backbone_bn=True,
+    def __init__(self, num_classes=2, width=256, freeze_backbone_bn=False,
                  use_dynamic_fusion=True):
         super().__init__()
         if not 2 <= num_classes <= 256:

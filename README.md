@@ -57,7 +57,9 @@ python check_data.py --data-path data/VOC201201 --mask-encoding index --num-clas
 
 默认使用`pretrained/resnet50.pth`，缺失时报错，不回退随机初始化。可用`python download_pretrained.py`下载torchvision官方ResNet-50 ImageNet-1K V2权重，或手动放入兼容的RGB骨干state_dict。只初始化骨干，分割模块需要训练。
 
-默认batch32、30轮，AdamW，学习率1e-4，余弦调度，AMP开启。骨干卷积仍更新；`freeze_backbone_bn`只固定骨干BN运行统计，MPM内部BN照常训练。
+默认batch32、30轮，AdamW，学习率1e-4，余弦调度，AMP开启。默认解冻骨干BN：训练时使用当前batch统计并更新运行均值/方差，验证与推理仍使用eval模式的运行统计。骨干卷积与BN仿射参数均训练；MPM内部BN照常训练。`--freeze-backbone-bn`可手动固定骨干BN统计（不冻结卷积或BN仿射参数）；`--no-freeze-backbone-bn`显式解冻，与新默认相同。
+
+此默认值修改不改变模型结构或v4权重格式；加载权重仍使用检查点记录的设置。旧运行如果保存的是`freeze_backbone_bn=true`，断点恢复须显式加`--freeze-backbone-bn`，否则配置校验会拒绝恢复。不要为了切换BN模式覆盖旧实验，改用新结果目录。
 
 ```bash
 python train_medical.py \
