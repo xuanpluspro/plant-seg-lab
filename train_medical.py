@@ -19,7 +19,7 @@ def parse_args():
     p.add_argument("--data-path", default="VOCdevkit")
     p.add_argument("--output", default="run/train/ossseg")
     init = p.add_mutually_exclusive_group()
-    init.add_argument("--backbone-weights", help="Local torchvision ResNet-50 ImageNet weights")
+    init.add_argument("--backbone-weights", help="Local ResNet-50 weights or full U-Net checkpoint with resnet.* backbone")
     init.add_argument("--from-scratch", action="store_true", help="Explicitly train without pretraining")
     init.add_argument("--resume", help="Resume this project's last.pth with optimizer/RNG state")
     p.add_argument("--num-classes", type=int, default=1, help="Foreground class count excluding background: 1 for binary, 4 for IDs 0..4")
@@ -88,8 +88,10 @@ def train(args):
     model = OSSSeg(**model_config)
     initialization = args.backbone_weights or "random"
     if args.backbone_weights:
-        model.load_backbone(args.backbone_weights)
-        print(f"Loaded pretrained ResNet-50 backbone: {args.backbone_weights}", flush=True)
+        report = model.load_backbone(args.backbone_weights)
+        print(f"Loaded pretrained ResNet-50 backbone: {args.backbone_weights}; "
+              f"namespace={report['namespace']}; loaded_tensors={report['loaded_tensors']}; "
+              f"ignored_entries={report['ignored_entries']}", flush=True)
     if args.from_scratch:
         print("Explicit random initialization; no weights will be downloaded.", flush=True)
     model.to(device)

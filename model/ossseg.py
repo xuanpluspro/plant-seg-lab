@@ -3,7 +3,6 @@
 forward(x) -> logits [B,K,H,W]; forward(x, return_aux=True) -> dict.
 Class 0 = background; classes 1..K-1 = foreground. Core modules are attributed in README.
 """
-from pathlib import Path
 import torch
 from torch import nn
 from torch.nn import functional as F
@@ -49,15 +48,9 @@ class OSSSeg(nn.Module):
         self.segmentation_head = nn.Sequential(conv_block(96, 64), nn.Conv2d(64, num_classes, 1))
 
     def load_backbone(self, path):
-        """Strict local torchvision ResNet-50 weights; ignore only the ImageNet fc."""
-        state = torch.load(Path(path), map_location="cpu", weights_only=True)
-        state = state.get("state_dict", state)
-        cleaned = {}
-        for key, value in state.items():
-            key = key.removeprefix("module.").removeprefix("backbone.")
-            if not key.startswith("fc."):
-                cleaned[key] = value
-        self.backbone.load_state_dict(cleaned, strict=True)
+        """Load compatible plain ResNet or extract it from a full U-Net checkpoint."""
+        from .pretrained import load_resnet_backbone
+        return load_resnet_backbone(self.backbone, path)
 
     def train(self, mode=True):
         super().train(mode)

@@ -150,3 +150,21 @@ DRM用两路3×3普通卷积（dilation=1/2），直接从输入经GAP生成两�
 - v4不能加载旧完整模型继续训练。`pretrained/resnet50.pth`仍可用；请新建上述带`sparse`的实验目录。
 
 来源与差异见[model/MPM_SOURCE.md](model/MPM_SOURCE.md)。这是MPCNet与MSCN思路的组合改造，不是原论文严格复现，真实精度与CUDA性能尚需实际训练测量。
+
+
+## 使用完整 U-Net 中的 ResNet-50 预训练权重
+
+将`unet_resnet_voc.pth`上传至`pretrained/`，训练时指定：
+
+```bash
+python train_medical.py \
+  --data-path data/VOCdevkit-3.3 \
+  --mask-encoding binary255 --num-classes 1 \
+  --backbone-weights pretrained/unet_resnet_voc.pth \
+  --batch-size 32 --epochs 50 --workers 4 --device cuda --amp \
+  --output run/train/vocdevkit33_unetvoc_backbone_bntrain_bs32_ep50
+```
+
+加载器接受标准torchvision ResNet-50 state_dict、`resnet.*`或`backbone.*`命名空间（支持`module.`前缀），以及`state_dict`、`model_state_dict`、`model`、`net`字典包装。完整U-Net只提取骨干，解码器不加载；ImageNet的fc分类层也不加载。全部骨干参数和BN缓冲区在加载前严格检查名称与尺寸，不兼容则报错，不使用strict=False静默漏载。终端会显示识别的命名空间、加载张量数和跳过条目数。
+
+这不改变当前模型架构、损失或v4检查点格式，也不把旧U-Net解码器迁移过来。默认仍是`pretrained/resnet50.pth`，只有显式指定时才切换。默认骨干BN解冻；比较预训练权重时保持BN和其他训练设置一致，结果使用新目录。实际用户权重需上传后由严格检查确认兼容；文件名不能证明其训练来源。

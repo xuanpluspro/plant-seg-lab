@@ -36,3 +36,64 @@ class PretrainedContracts(unittest.TestCase):
 
 
 if __name__ == '__main__': unittest.main()
+
+
+class BackboneExtraction(unittest.TestCase):
+    def setUp(self):
+        import torch
+        from torchvision.models import resnet50
+        from torch import nn
+        torch.set_num_threads(2)
+        self.torch = torch
+        self.source = resnet50(weights=None)
+        self.source.fc = nn.Identity()
+
+    def test_full_unet_and_wrappers_ignore_only_other_namespaces(self):
+        from model import OSSSeg
+        torch = self.torch
+        state = {'module.resnet.' + k: v for k, v in self.source.state_dict().items()}
+        state['module.up_concat4.conv.weight'] = torch.randn(3, 5, 1, 1)
+        model = OSSSeg(width=16)
+        decoder_before = model.segmentation_head[-1].weight.detach().clone()
+        with tempfile.TemporaryDirectory() as d:
+            path = Path(d) / 'unet.pth'
+            for wrapper in (None, 'state_dict', 'model_state_dict', 'model', 'net'):
+                torch.save(state if wrapper is None else {wrapper: state, 'epoch': 12}, path)
+                report = model.load_backbone(path)
+                self.assertEqual(report['namespace'], 'resnet.')
+                self.assertEqual(report['ignored_entries'], 1)
+                self.assertEqual(report['loaded_tensors'], len(self.source.state_dict()))
+                for k, v in self.source.state_dict().items():
+                    torch.testing.assert_close(model.backbone.state_dict()[k], v, rtol=0, atol=0)
+        torch.testing.assert_close(model.segmentation_head[-1].weight, decoder_before, rtol=0, atol=0)
+
+    def test_plain_and_backbone_prefixed_weights_with_classifier(self):
+        from model.pretrained import load_resnet_backbone
+        torch = self.torch
+        state = dict(self.source.state_dict())
+        state.update({'fc.weight': torch.randn(1000, 2048), 'fc.bias': torch.randn(1000)})
+        with tempfile.TemporaryDirectory() as d:
+            path = Path(d) / 'resnet.pth'
+            for prefix in ('', 'module.backbone.'):
+                torch.save({prefix + k: v for k, v in state.items()}, path)
+                report = load_resnet_backbone(self.source, path)
+                self.assertEqual(report['ignored_entries'], 2)
+                self.assertEqual(report['loaded_tensors'], len(self.source.state_dict()))
+
+    def test_invalid_backbone_is_rejected_before_any_tensor_changes(self):
+        from model.pretrained import load_resnet_backbone
+        torch = self.torch
+        good = dict(self.source.state_dict())
+        broken = dict(good)
+        broken['conv1.weight'] = torch.zeros_like(good['conv1.weight'])
+        broken['layer4.2.conv3.weight'] = torch.zeros(8, 8, 1, 1)
+        missing = {k: v for k, v in good.items() if k != 'layer1.0.conv3.weight'}
+        ambiguous = {'resnet.' + k: v for k, v in good.items()}
+        ambiguous.update({'backbone.' + k: v for k, v in good.items()})
+        before = self.source.conv1.weight.detach().clone()
+        with tempfile.TemporaryDirectory() as d:
+            path = Path(d) / 'bad.pth'
+            for state in (broken, missing, ambiguous, {'decoder.weight': torch.zeros(1)}):
+                torch.save(state, path)
+                with self.assertRaises(ValueError): load_resnet_backbone(self.source, path)
+                torch.testing.assert_close(self.source.conv1.weight, before, rtol=0, atol=0)
