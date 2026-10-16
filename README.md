@@ -4,11 +4,11 @@
 
 ## 模型结构
 
-RGB → ResNet-50四级特征 → 通道统一 → 最深层MPM-5531 → SSAF自顶向下融合 → 辅助前景引导 → 三个跨尺度动态调制 → 多尺度解码器＋RGB细节分支 → K类logits。
+RGB → ResNet-50四级特征 → 通道统一 → 最深层MPM-5531 → DRM/CBM自顶向下融合 → 辅助前景引导 → 三个跨尺度动态调制 → 多尺度解码器＋RGB细节分支 → K类logits。
 
 - `model/mpm.py`：通道四分，依次经过5×5、5×5、3×3、1×1普通卷积及BN/ReLU；两个5×5分支共享卷积和BN。四路结果与原输入Concat到2C，再由CBR融合回C，最后经过CAM。CBR保留MPCNet的可学习7×7深度卷积激活；CAM采用h-swish。未加入QKV。
 - `model/dynamic_fusion.py`：浅层降采样与深层投影，共同生成仿射调制参数；细化后加深层残差。三个位置参数独立。
-- `model/ssaf.py`：沿用MODA的融合模块。
+- `model/ssaf.py`：SACF中的SFA替换为DRM（深层），SDE替换为CBM（浅层）；保留原来的双线性上采样、双Sigmoid空间融合权重和Conv/BN/ReLU输出投影。
 - `model/fem.py`：保留原CAFR/FEM，供`--no-dynamic-fusion`对照使用。
 - `model/losses.py`：K类交叉熵＋前景Dice＋0.2×辅助前景并集BCE。
 
@@ -66,7 +66,7 @@ python train_medical.py \
   --num-classes 1 \
   --backbone-weights pretrained/resnet50.pth \
   --batch-size 32 --epochs 30 --workers 4 --device cuda --amp \
-  --output run/train/vegann01_mpm5531_dynamic_clean_bs32_ep30
+  --output run/train/vegann01_mpm5531_drmcbm_dynamic_bs32_ep30
 ```
 
 显存不足降低batch；输出目录须为空。`--from-scratch`显式随机初始化，短流程测试建议epochs2、batch1。动态调制默认开启，`--no-dynamic-fusion`恢复原FEM用于对照；MPM保持固定。
@@ -122,3 +122,12 @@ python -m unittest discover -s tests -v
 CPU合成数据测试覆盖512前向/反向、检查点恢复、动态融合开关、二分类/五分类训练、结果与预测导出；不能代替真实植物精度和CUDA验证。默认结构不保证比原方法更好。
 
 MODA模块来源、分割改造与许可证见model/README.md及LICENSE.MODA；MPCNet来源与改写见model/MPM_SOURCE.md。当前5531是改写，不能称原版MPM严格复现。旧图和旧实验代码可在Git历史中查找。
+
+
+## SACF：DRM替换SFA，CBM替换SDE
+
+三个自顶向下位置均改为：深层[B,C,h,w]→DRM→上采样到[2h,2w]；浅层[B,C,2h,2w]→CBM；再使用原有自适应融合，输出[B,C,2h,2w]。三个位置不共享参数。MPM-5531、三个CAFR动态调制、损失、标签编码和指标口径未改。
+
+DRM用两路3×3普通卷积（dilation=1/2），直接从输入经GAP生成两个图像级Softmax权重，逐分支加权后Concat并用1×1融合，输出x+gamma*fused；gamma初始化0。CBM采用DWConv→PWConv→GELU局部分支，加上GAP→Conv→Sigmoid生成的通道权重对原输入的重加权，经过输出投影再加输入。没有导入完整HFCB的BN、两路平均或额外外层gamma；来源与改写见model/SACF_SOURCE.md。
+
+检查点格式更新为v3；旧完整模型不能resume到新结构，请从相同ResNet骨干预训练开始新实验。旧权重和结果文件不会被删除，旧代码保留在Git历史。当前未加入QKV。

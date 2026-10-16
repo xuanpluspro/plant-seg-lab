@@ -4,7 +4,7 @@ import numpy as np
 import torch
 from model import OSSSeg
 
-FORMAT = "plant_seg_lab_mpm5531_v2"
+FORMAT = "plant_seg_lab_mpm5531_drm_cbm_v3"
 
 
 def seed_everything(seed):
@@ -44,7 +44,7 @@ def save_checkpoint(payload, path):
 def read_checkpoint(path):
     ckpt = torch.load(path, map_location="cpu", weights_only=True)
     if not isinstance(ckpt, dict) or ckpt.get("format") != FORMAT:
-        raise ValueError("Expected current MPM-5531 v2 checkpoint; start a new run for older model formats")
+        raise ValueError("Expected current MPM-5531 + DRM/CBM v3 checkpoint; start a new run for older model formats")
     return ckpt
 
 
