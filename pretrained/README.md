@@ -19,3 +19,10 @@ and common state-dict wrappers, and strictly validates every backbone key
 and shape before loading. Decoder tensors and fc classifier tensors are
 ignored. This does not replace the segmentation architecture. The default
 resnet50.pth is unchanged. Upload binary weights yourself; do not commit them.
+
+
+Before training: python check_pretrained.py --weights pretrained/unet_resnet_voc.pth --device cuda
+Success prints CHECK PASSED. Default batch1, size512, width256; add
+--batch-size 32 to exercise the intended training batch on an idle GPU.
+The check validates loading/numerics and synthetic train/eval execution,
+without an optimizer step or any checkpoint write.

@@ -168,3 +168,16 @@ python train_medical.py \
 加载器接受标准torchvision ResNet-50 state_dict、`resnet.*`或`backbone.*`命名空间（支持`module.`前缀），以及`state_dict`、`model_state_dict`、`model`、`net`字典包装。完整U-Net只提取骨干，解码器不加载；ImageNet的fc分类层也不加载。全部骨干参数和BN缓冲区在加载前严格检查名称与尺寸，不兼容则报错，不使用strict=False静默漏载。终端会显示识别的命名空间、加载张量数和跳过条目数。
 
 这不改变当前模型架构、损失或v4检查点格式，也不把旧U-Net解码器迁移过来。默认仍是`pretrained/resnet50.pth`，只有显式指定时才切换。默认骨干BN解冻；比较预训练权重时保持BN和其他训练设置一致，结果使用新目录。实际用户权重需上传后由严格检查确认兼容；文件名不能证明其训练来源。
+
+
+## 上传预训练权重后，先检查再训练
+
+```bash
+python check_pretrained.py \
+  --weights pretrained/unet_resnet_voc.pth \
+  --device cuda
+```
+
+默认按当前完整模型（width256、512×512、batch1、骨干BN解冻）检查：严格提取全部骨干权重、检测NaN/Inf及非法BN方差、随机输入前向/损失/反向梯度、eval前向。CUDA默认启用AMP，CPU使用FP32。成功末尾打印`CHECK PASSED`并返回退出码0；失败打印`CHECK FAILED`并返回非零，指出文件缺失、名称/尺寸不兼容或数值异常。
+
+希望按训练batch32检查时加`--batch-size 32`，请在其他训练停止后运行。支持`--num-classes`（不含背景）、`--width`、`--size`、`--freeze-backbone-bn`、`--no-dynamic-fusion`、`--no-amp`，应与目标训练设置保持一致。检查不会更新模型优化器参数或写入权重，不使用真实数据；内存中的BN统计会在合成训练前向中更新，原文件不变。检查通过只证明本次权重加载和合成前后向可运行，不保证标签正确、真实精度或整个训练过程不发生显存不足。
