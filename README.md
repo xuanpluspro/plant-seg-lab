@@ -1,12 +1,12 @@
 # Plant Seg Lab：RGB 植物语义分割
 
-当前固定使用 **MPM-5531** 替换 CSSP，并使用跨尺度动态调制替换三个 CAFR。支持二分类和多分类。该组合的真实精度需要实验验证，不预先宣称提升。
+当前固定使用 **MPM-5531 + 稀疏注意力** 替换 CSSP，并使用跨尺度动态调制替换三个 CAFR。支持二分类和多分类。该组合的真实精度需要实验验证，不预先宣称提升。
 
 ## 模型结构
 
-RGB → ResNet-50四级特征 → 通道统一 → 最深层MPM-5531 → DRM/CBM自顶向下融合 → 辅助前景引导 → 三个跨尺度动态调制 → 多尺度解码器＋RGB细节分支 → K类logits。
+RGB → ResNet-50四级特征 → 通道统一 → 最深层MPM-5531＋稀疏注意力＋残差 → DRM/CBM自顶向下融合 → 辅助前景引导 → 三个跨尺度动态调制 → 多尺度解码器＋RGB细节分支 → K类logits。
 
-- `model/mpm.py`：通道四分，依次经过5×5、5×5、3×3、1×1普通卷积及BN/ReLU；两个5×5分支共享卷积和BN。四路结果与原输入Concat到2C，再由CBR融合回C，最后经过CAM。CBR保留MPCNet的可学习7×7深度卷积激活；CAM采用h-swish。未加入QKV。
+- `model/mpm.py`：通道四分，依次经过5×5、5×5、3×3、1×1普通卷积及BN/ReLU；两个5×5分支共享卷积和BN。四路结果与原输入仅拼接一次到2C，再由CBR融合回C得到Fm。Q由Fm经1×1投影生成；K/V由CAM（坐标注意力）输出经逐位置通道LayerNorm和1×1投影生成，分别保留约1/2、1/6位置的双Top-k注意力聚合后，经输出投影加回Fm。默认8头，α/β从0.5开始学习且无非负或和为1的约束。CBR保留MPCNet的可学习7×7深度卷积激活；CAM采用h-swish。不增加第二组多尺度池化。
 - `model/dynamic_fusion.py`：浅层降采样与深层投影，共同生成仿射调制参数；细化后加深层残差。三个位置参数独立。
 - `model/ssaf.py`：SACF中的SFA替换为DRM（深层），SDE替换为CBM（浅层）；保留原来的双线性上采样、双Sigmoid空间融合权重和Conv/BN/ReLU输出投影。
 - `model/fem.py`：保留原CAFR/FEM，供`--no-dynamic-fusion`对照使用。
@@ -14,7 +14,7 @@ RGB → ResNet-50四级特征 → 通道统一 → 最深层MPM-5531 → DRM/CBM
 
 512×512输入时，四层统一后的特征为[B,256,128,128]、[B,256,64,64]、[B,256,32,32]、[B,256,16,16]，MPM位于最后一层。动态调制依次更新1/8、1/16、1/32特征。默认宽度256，`--width`可调整。特征交互路径使用FP32，骨干和分割头支持AMP。
 
-当前不提供旧CSSP实现选择、旧模型加载适配或卷积核切换。固定5531模型采用新的检查点格式；旧完整模型请使用Git历史版本评估。新实验从ResNet骨干预训练权重开始，不覆盖旧结果目录。数据集、权重文件不会随更新删除。
+当前不提供旧CSSP实现选择、旧模型加载适配或卷积核切换。当前稀疏注意力模型采用v4检查点格式；旧完整模型请使用Git历史版本评估。新实验从ResNet骨干预训练权重开始，不覆盖旧结果目录。数据集、权重文件不会随更新删除。
 
 ## AutoDL 安装与更新
 
@@ -66,7 +66,7 @@ python train_medical.py \
   --num-classes 1 \
   --backbone-weights pretrained/resnet50.pth \
   --batch-size 32 --epochs 30 --workers 4 --device cuda --amp \
-  --output run/train/vegann01_mpm5531_drmcbm_dynamic_bs32_ep30
+  --output run/train/vegann01_mpm5531_sparse_drmcbm_dynamic_bs32_ep30
 ```
 
 显存不足降低batch；输出目录须为空。`--from-scratch`显式随机初始化，短流程测试建议epochs2、batch1。动态调制默认开启，`--no-dynamic-fusion`恢复原FEM用于对照；MPM保持固定。
@@ -126,8 +126,25 @@ MODA模块来源、分割改造与许可证见model/README.md及LICENSE.MODA；M
 
 ## SACF：DRM替换SFA，CBM替换SDE
 
-三个自顶向下位置均改为：深层[B,C,h,w]→DRM→上采样到[2h,2w]；浅层[B,C,2h,2w]→CBM；再使用原有自适应融合，输出[B,C,2h,2w]。三个位置不共享参数。MPM-5531、三个CAFR动态调制、损失、标签编码和指标口径未改。
+三个自顶向下位置均改为：深层[B,C,h,w]→DRM→上采样到[2h,2w]；浅层[B,C,2h,2w]→CBM；再使用原有自适应融合，输出[B,C,2h,2w]。三个位置不共享参数。三个CAFR动态调制、损失、标签编码和指标口径保持原设置；最深层MPM现已加入稀疏注意力。
 
 DRM用两路3×3普通卷积（dilation=1/2），直接从输入经GAP生成两个图像级Softmax权重，逐分支加权后Concat并用1×1融合，输出x+gamma*fused；gamma初始化0。CBM采用DWConv→PWConv→GELU局部分支，加上GAP→Conv→Sigmoid生成的通道权重对原输入的重加权，经过输出投影再加输入。没有导入完整HFCB的BN、两路平均或额外外层gamma；来源与改写见model/SACF_SOURCE.md。
 
-检查点格式更新为v3；旧完整模型不能resume到新结构，请从相同ResNet骨干预训练开始新实验。旧权重和结果文件不会被删除，旧代码保留在Git历史。当前未加入QKV。
+检查点格式更新为v4；旧完整模型（包括v3）不能resume到新结构，请从相同ResNet骨干预训练开始新实验。旧权重和结果文件不会被删除，旧代码保留在Git历史。当前已加入Q/KV投影、双Top-k注意力和融合特征残差。
+
+
+## MPM 稀疏注意力的实现约定
+
+`Fm = CBR(Concat(conv5(x1), conv5(x2), conv3(x3), conv1(x4), x))`。
+`Q = ConvQ(Fm)`；`K,V = Split(ConvKV(LN(CAM(Fm))))`；
+`A = α·Softmax(Top-half(QKᵀ/√d))·V + β·Softmax(Top-sixth(QKᵀ/√d))·V`；
+`output = Fm + ConvOut(A)`。多头拆分和恢复空间形状省略于上述表达式，d为每头通道数。
+
+- 默认C=256、8头、每头32通道；512输入对应16×16特征，单头注意力为256×256。1024输入对应32×32特征，单头注意力为1024×1024；计算/显存随位置数平方增长。
+- LayerNorm仅在CAM后的KV分支，按每个空间位置的C通道归一化；Q不额外归一化。不用BN、GroupNorm代替此LN。卷积投影无额外激活；没有新增Dropout或残差缩放系数。
+- Top-k以`max(1, floor(N/divisor))`保留位置，divisor固定2/6；未选位置在Softmax前设为负无穷。支持非正方形和1×1特征；保持原始H/W，不从sqrt(N)推断。
+- 相关性、Softmax和注意力聚合用FP32。模块在OSSSeg中仍处于原有FP32交互路径；没有引入einops或timm依赖。
+- 掩码与矩阵乘法仍为稠密实现，不把Top-k宣称为稀疏算子加速。完整GFLOPs仍按现有工具支持情况报告。
+- v4不能加载旧完整模型继续训练。`pretrained/resnet50.pth`仍可用；请新建上述带`sparse`的实验目录。
+
+来源与差异见[model/MPM_SOURCE.md](model/MPM_SOURCE.md)。这是MPCNet与MSCN思路的组合改造，不是原论文严格复现，真实精度与CUDA性能尚需实际训练测量。

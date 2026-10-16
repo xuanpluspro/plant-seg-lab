@@ -50,3 +50,85 @@ class MPMContracts(unittest.TestCase):
         self.assertFalse(hasattr(args,'cssp_module'))
         self.assertFalse(hasattr(args,'mpm_variant'))
         self.assertFalse(hasattr(args,'adpm'))
+
+
+class SparseAttentionContracts(unittest.TestCase):
+    def test_sources_normalization_and_residual(self):
+        torch.set_num_threads(2)
+        model = MPM(32).eval()
+        seen = {}
+        def record(name):
+            def hook(module, inputs, output):
+                seen[name] = output.detach().clone()
+            return hook
+        def record_input(name):
+            def hook(module, inputs):
+                seen[name] = inputs[0].detach().clone()
+            return hook
+        handles = [model.Conv.register_forward_hook(record('fused')),
+                   model.ca.register_forward_hook(record('cam')),
+                   model.attention.q.register_forward_pre_hook(record_input('q_input')),
+                   model.attention.kv.register_forward_pre_hook(record_input('kv_input')),
+                   model.attention.register_forward_hook(record('attention'))]
+        x = torch.randn(2, 32, 8, 12)
+        with torch.no_grad(): actual = model(x)
+        for h in handles: h.remove()
+        torch.testing.assert_close(seen['q_input'], seen['fused'])
+        expected_kv_input = model.attention.norm(seen['cam'].permute(0, 2, 3, 1)).permute(0, 3, 1, 2)
+        torch.testing.assert_close(seen['kv_input'], expected_kv_input)
+        torch.testing.assert_close(actual, seen['fused'] + seen['attention'])
+        # A zero attention output must leave exactly the fused feature, not CAM.
+        torch.nn.init.zeros_(model.attention.proj.weight)
+        torch.nn.init.zeros_(model.attention.proj.bias)
+        with torch.no_grad(): torch.testing.assert_close(model(x), seen['fused'])
+
+    def test_attention_against_per_query_reference(self):
+        from model.mpm import SparseAttention
+        # Independent per-query reference verifies selected value aggregation,
+        # floor-based keep counts and the two unconstrained learned coefficients.
+        torch.manual_seed(7)
+        m = SparseAttention(8, num_heads=2).eval()
+        x, y = torch.randn(1, 8, 2, 3), torch.randn(1, 8, 2, 3)
+        with torch.no_grad():
+            m.attn1.fill_(0.7)
+            m.attn2.fill_(-0.2)
+            q = m.q(x).flatten(2).transpose(1, 2)[0]
+            kv = m.kv(m.norm(y.permute(0, 2, 3, 1)).permute(0, 3, 1, 2))
+            k, v = kv.chunk(2, dim=1)
+            k, v = k.flatten(2).transpose(1, 2)[0], v.flatten(2).transpose(1, 2)[0]
+            reference = torch.zeros(6, 8)
+            for head in range(2):
+                sl = slice(head * 4, (head + 1) * 4)
+                for i in range(6):
+                    scores = (k[:, sl] * q[i, sl]).sum(-1) / 2
+                    for divisor, coefficient in [(2, 0.7), (6, -0.2)]:
+                        ids = scores.argsort(descending=True)[:max(1, 6 // divisor)]
+                        reference[i, sl] += coefficient * (scores[ids].softmax(0)[:, None] * v[ids, sl]).sum(0)
+            reference = m.proj(reference.T.reshape(1, 8, 2, 3))
+            torch.testing.assert_close(m(x, y), reference)
+
+    def test_small_rectangular_and_autocast_backward(self):
+        from model.mpm import SparseAttention
+        for h, w in [(1, 1), (2, 3), (8, 12)]:
+            m = SparseAttention(16)
+            x = torch.randn(2, 16, h, w, requires_grad=True)
+            y = torch.randn_like(x, requires_grad=True)
+            with torch.autocast('cpu', dtype=torch.bfloat16):
+                out = m(x, y)
+                loss = out.float().square().mean()
+            self.assertEqual(out.shape, x.shape)
+            self.assertTrue(torch.isfinite(out).all())
+            loss.backward()
+            self.assertTrue(torch.isfinite(x.grad).all())
+            self.assertTrue(torch.isfinite(y.grad).all())
+            self.assertTrue(all(p.grad is not None and torch.isfinite(p.grad).all() for p in m.parameters()))
+
+    def test_configuration_and_old_checkpoint_rejected(self):
+        from model.mpm import SparseAttention
+        from utils.runtime import read_checkpoint
+        with self.assertRaises(ValueError): SparseAttention(12)
+        with self.assertRaises(ValueError): SparseAttention(16, k2=0)
+        with tempfile.TemporaryDirectory() as d:
+            p = Path(d) / 'old.pth'
+            torch.save({'format': 'plant_seg_lab_mpm5531_drm_cbm_v3'}, p)
+            with self.assertRaisesRegex(ValueError, 'v4'): read_checkpoint(p)

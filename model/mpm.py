@@ -1,8 +1,9 @@
-"""MPCNet-derived MPM with fixed 5/5/3/1 branch kernels.
+"""MPM-5531 with CAM-conditioned sparse attention and a fusion-feature residual.
 
 Source: https://github.com/Wangtao-Bao/MPCNet/blob/5024ea51e8abdf7bc40e36489041143c468b1fdf/MPCNet.py
 Authors: Wangtao-Bao/MPCNet contributors. See model/MPM_SOURCE.md.
 The MPM kernel selection is adapted; helper classes retain upstream behavior.
+Sparse attention follows MSCN; see model/MPM_SOURCE.md for sources and changes.
 """
 import torch
 import torch.nn as nn
@@ -131,11 +132,63 @@ class CoordAttiton(nn.Module):
         return out
 
 
+class SparseAttention(nn.Module):
+    """Q from fused features; K/V from CAM features, with no second pooling.
+
+    The two learned scalars are unconstrained, as in MSCN. Top-k is dense
+    masked attention, not a sparse kernel or a guarantee of lower FLOPs.
+    """
+    def __init__(self, channels, num_heads=8, k1=2, k2=6):
+        super().__init__()
+        if num_heads < 1 or channels < 1 or channels % num_heads:
+            raise ValueError("Attention channels must be divisible by num_heads")
+        if k1 < 1 or k2 < 1:
+            raise ValueError("Top-k divisors must be >= 1")
+        self.num_heads = num_heads
+        self.scale = (channels // num_heads) ** -0.5
+        self.k1, self.k2 = k1, k2
+        self.norm = nn.LayerNorm(channels)
+        self.q = nn.Conv2d(channels, channels, 1, bias=False)
+        self.kv = nn.Conv2d(channels, 2 * channels, 1, bias=False)
+        self.attn1 = nn.Parameter(torch.tensor([0.5]))
+        self.attn2 = nn.Parameter(torch.tensor([0.5]))
+        self.proj = nn.Conv2d(channels, channels, 1)
+
+    @staticmethod
+    def _aggregate(scores, values, divisor):
+        # Retain at least one key even for 1x1 maps; do not delete positions.
+        keep = max(1, int(scores.shape[-1] / divisor))
+        indices = scores.topk(keep, dim=-1, sorted=False).indices
+        mask = torch.zeros_like(scores, dtype=torch.bool)
+        mask.scatter_(-1, indices, True)
+        weights = scores.masked_fill(~mask, float("-inf")).softmax(dim=-1)
+        return weights @ values
+
+    def forward(self, fused, cam):
+        if fused.ndim != 4 or cam.shape != fused.shape:
+            raise ValueError("Expected matching fused/CAM features [B,C,H,W]")
+        b, c, h, w = fused.shape
+        # LayerNorm across channels independently at each spatial position.
+        normalized = self.norm(cam.permute(0, 2, 3, 1)).permute(0, 3, 1, 2)
+        q = self.q(fused).reshape(b, self.num_heads, c // self.num_heads, h * w).transpose(-2, -1)
+        kv = self.kv(normalized).reshape(b, 2, self.num_heads, c // self.num_heads, h * w)
+        k, v = kv.unbind(dim=1)
+        k, v = k.transpose(-2, -1), v.transpose(-2, -1)
+        # Compute correlations and softmax in FP32, including under autocast.
+        with torch.autocast(device_type=fused.device.type, enabled=False):
+            scores = (q.float() @ k.float().transpose(-2, -1)) * self.scale
+            out1 = self._aggregate(scores, v.float(), self.k1)
+            out2 = self._aggregate(scores, v.float(), self.k2)
+            out = self.attn1 * out1 + self.attn2 * out2
+        out = out.transpose(-2, -1).reshape(b, c, h, w).to(q.dtype)
+        return self.proj(out)
+
+
 class MPM(nn.Module):
     def __init__(self, in_channel):
         super(MPM, self).__init__()
-        if in_channel < 4 or in_channel % 4:
-            raise ValueError("MPM channels must be a positive multiple of four")
+        if in_channel < 8 or in_channel % 8:
+            raise ValueError("MPM channels must be a positive multiple of eight")
 
         self.conv1 = nn.Sequential(
             nn.Conv2d(in_channel // 4, in_channel // 4, 1, 1, padding=0),
@@ -158,6 +211,7 @@ class MPM(nn.Module):
 
         self.Conv = CBR(in_channel * 2, in_channel, 1)
         self.ca = CoordAttiton(in_channel,in_channel)
+        self.attention = SparseAttention(in_channel)
 
     def forward(self, x):
         b, c, h, w = x.size()
@@ -169,6 +223,6 @@ class MPM(nn.Module):
         # The two 5x5 branches share convolution weights and BatchNorm.
         branches = (self.conv5(x_1), self.conv5(x_2),
                     self.conv3(x_3), self.conv1(x_4))
-        out = self.ca(self.Conv(torch.cat((*branches, x), 1)))
-
-        return out
+        fused = self.Conv(torch.cat((*branches, x), 1))
+        cam = self.ca(fused)
+        return fused + self.attention(fused, cam)
