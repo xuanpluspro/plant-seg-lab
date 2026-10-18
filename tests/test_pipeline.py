@@ -20,7 +20,7 @@ class Pipeline(unittest.TestCase):
     def test_end_to_end_and_resume(self):
         with tempfile.TemporaryDirectory() as d:
             root = Path(d) / "VOC2012"
-            for folder in ("JPEGImages", "SegmentationClass", "ImageSets/Segmentation"):
+            for folder in ("JPEGImages", "SegmentationClass", "ImageSets"):
                 (root / folder).mkdir(parents=True)
             for split in ("train", "val", "test"):
                 name = f"{split}_sample"
@@ -30,7 +30,7 @@ class Pipeline(unittest.TestCase):
                 image[mask == 255] = [20, 190, 30]
                 Image.fromarray(image).save(root / "JPEGImages" / f"{name}.jpg")
                 Image.fromarray(mask).save(root / "SegmentationClass" / f"{name}.png")
-                (root / "ImageSets/Segmentation" / f"{split}.txt").write_text(name + "\n")
+                (root / "ImageSets" / f"{split}.txt").write_text(name + "\n")
             args = argparse.Namespace(data_path=str(root), output=str(Path(d)/"uninterrupted"),
                 backbone_weights=None, from_scratch=True, resume=None, num_classes=1,
                 width=16, freeze_backbone_bn=True, epochs=2, batch_size=1, workers=0,

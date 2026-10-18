@@ -37,7 +37,7 @@ pip install -r requirements.txt
 
 ## 数据目录与标签
 
-把不同数据集放到`data/`下，不提交Git。`--data-path`指向含JPEGImages、SegmentationClass、ImageSets/Segmentation的VOC根目录。清单为train.txt、val.txt和可选test.txt，每行一个无扩展名ID。划分必须互不重叠，训练前准备好测试清单，不自动重新划分。
+把不同数据集放到`data/`下，不提交Git。`--data-path`指向含JPEGImages、SegmentationClass、ImageSets的VOC根目录。清单支持`ImageSets/Segmentation/*.txt`或`ImageSets/*.txt`两种布局：train.txt、val.txt和可选test.txt，每行一个无扩展名ID。划分必须互不重叠，训练前准备好测试清单，不自动重新划分。
 
 图像和掩码都必须512×512，不隐式缩放；训练同步翻转与90度旋转，验证无随机增强。RGB按ImageNet mean/std归一化。
 
@@ -181,3 +181,25 @@ python check_pretrained.py \
 默认按当前完整模型（width256、512×512、batch1、骨干BN解冻）检查：严格提取全部骨干权重、检测NaN/Inf及非法BN方差、随机输入前向/损失/反向梯度、eval前向。CUDA默认启用AMP，CPU使用FP32。成功末尾打印`CHECK PASSED`并返回退出码0；失败打印`CHECK FAILED`并返回非零，指出文件缺失、名称/尺寸不兼容或数值异常。
 
 希望按训练batch32检查时加`--batch-size 32`，请在其他训练停止后运行。支持`--num-classes`（不含背景）、`--width`、`--size`、`--freeze-backbone-bn`、`--no-dynamic-fusion`、`--no-amp`，应与目标训练设置保持一致。检查不会更新模型优化器参数或写入权重，不使用真实数据；内存中的BN统计会在合成训练前向中更新，原文件不变。检查通过只证明本次权重加载和合成前后向可运行，不保证标签正确、真实精度或整个训练过程不发生显存不足。
+
+
+## 两种数据划分清单布局
+
+无需复制或移动清单，所有训练、检查、验证和最终测试导出入口统一支持：
+
+| 布局 | train / val / 可选 test |
+|---|---|
+| 标准VOC | `ImageSets/Segmentation/train.txt`、`val.txt`、`test.txt` |
+| 平铺 | `ImageSets/train.txt`、`val.txt`、`test.txt` |
+
+按每个split自动查找；两处都有同名文件时，ID列表与顺序必须一致，否则明确报错，避免误用旧划分。之前复制出的相同清单仍兼容；若之后修改划分，应同步两份或仅保留一份。独立划分、重复ID与数据泄漏校验保持不变；平铺test.txt也会自动登记并参与最终测试。检查点记录的仍是ID列表，不绑定清单目录。
+
+外部数据集用绝对路径即可，例如：
+
+```bash
+python check_data.py \
+  --data-path /root/autodl-tmp/nclassbenchmark/data/GWFSSnclass \
+  --mask-encoding index --num-classes 3
+```
+
+这里总共4类（背景0、前景1/2/3），所以`--num-classes 3`。数据目录及掩码不做任何自动修改。

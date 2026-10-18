@@ -1,4 +1,4 @@
-"""VOC2012 directory layout, RGB images and binary 0/255 PNG masks."""
+"""VOC RGB datasets with binary/index masks and nested or flat split lists."""
 from pathlib import Path
 import random
 import numpy as np
@@ -21,22 +21,38 @@ def voc_root(path):
     return root
 
 
-def read_ids(root, split):
+def split_paths(root, split):
+    """Supported manifest locations, in conventional VOC priority order."""
     if split not in ("train", "val", "test"):
         raise ValueError("Use independent train/val/test lists, not trainval")
-    path = root / "ImageSets" / "Segmentation" / f"{split}.txt"
-    ids = [x.strip() for x in path.read_text(encoding="utf-8-sig").splitlines() if x.strip()]
-    if not ids or len(ids) != len(set(ids)):
-        raise ValueError(f"Empty or duplicate split IDs: {path}")
-    if any("/" in x or "\\" in x or len(x.split()) != 1 or x in (".", "..") for x in ids):
-        raise ValueError(f"One sample stem per line required: {path}")
-    return ids
+    root = Path(root)
+    return (root / "ImageSets" / "Segmentation" / f"{split}.txt",
+            root / "ImageSets" / f"{split}.txt")
+
+
+def read_ids(root, split):
+    candidates = split_paths(root, split)
+    paths = [p for p in candidates if p.is_file()]
+    if not paths:
+        raise FileNotFoundError("Split list not found; checked: " + ", ".join(map(str, candidates)))
+    selected = None
+    for path in paths:
+        ids = [x.strip() for x in path.read_text(encoding="utf-8-sig").splitlines() if x.strip()]
+        if not ids or len(ids) != len(set(ids)):
+            raise ValueError(f"Empty or duplicate split IDs: {path}")
+        if any("/" in x or "\\" in x or len(x.split()) != 1 or x in (".", "..") for x in ids):
+            raise ValueError(f"One sample stem per line required: {path}")
+        if selected is not None and ids != selected:
+            raise ValueError(f"Conflicting split lists: {paths[0]} and {path}; "
+                             "keep one copy or make IDs and order identical")
+        selected = ids
+    return selected
 
 
 def validate_splits(root):
     """Require train/val; check test disjointness when provided, without reading test pixels."""
     result = {split: read_ids(root, split) for split in ("train", "val")}
-    if (root / "ImageSets/Segmentation/test.txt").exists():
+    if any(p.is_file() for p in split_paths(root, "test")):
         result["test"] = read_ids(root, "test")
     keys = list(result)
     for i, a in enumerate(keys):
