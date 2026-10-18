@@ -37,7 +37,7 @@ pip install -r requirements.txt
 
 ## 数据目录与标签
 
-把不同数据集放到`data/`下，不提交Git。`--data-path`指向含JPEGImages、SegmentationClass、ImageSets的VOC根目录。清单支持`ImageSets/Segmentation/*.txt`或`ImageSets/*.txt`两种布局：train.txt、val.txt和可选test.txt，每行一个无扩展名ID。划分必须互不重叠，训练前准备好测试清单，不自动重新划分。
+把不同数据集放到`data/`下，不提交Git。`--data-path`指向含JPEGImages、SegmentationClass、ImageSets的VOC根目录。清单支持`ImageSets/Segmentation/*.txt`或`ImageSets/*.txt`两种布局：train.txt、val.txt和可选test.txt，每行一个无扩展名ID，内部空格和括号原样保留（例如`ARVALIS_ (1)`）。划分必须互不重叠，训练前准备好测试清单，不自动重新划分。
 
 图像和掩码都必须512×512，不隐式缩放；训练同步翻转与90度旋转，验证无随机增强。RGB按ImageNet mean/std归一化。
 
@@ -203,3 +203,6 @@ python check_data.py \
 ```
 
 这里总共4类（背景0、前景1/2/3），所以`--num-classes 3`。数据目录及掩码不做任何自动修改。
+
+
+文件名可包含内部空格和括号：清单一整行`ARVALIS_ (1)`对应原图`JPEGImages/ARVALIS_ (1).png`（也支持其他已列出的图片扩展名）与掩码`SegmentationClass/ARVALIS_ (1).png`。不按空格拆字段，不要删除文件名中的空格；只忽略行首尾空白和空行。清单仍不写路径或扩展名，禁止路径分隔符、NUL和重复ID，跨划分泄漏检查保持不变。图片、掩码及原始清单均不会自动重命名。

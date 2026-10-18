@@ -37,11 +37,12 @@ def read_ids(root, split):
         raise FileNotFoundError("Split list not found; checked: " + ", ".join(map(str, candidates)))
     selected = None
     for path in paths:
+        # Each line is one full stem: preserve internal spaces and parentheses.
         ids = [x.strip() for x in path.read_text(encoding="utf-8-sig").splitlines() if x.strip()]
         if not ids or len(ids) != len(set(ids)):
             raise ValueError(f"Empty or duplicate split IDs: {path}")
-        if any("/" in x or "\\" in x or len(x.split()) != 1 or x in (".", "..") for x in ids):
-            raise ValueError(f"One sample stem per line required: {path}")
+        if any("/" in x or "\\" in x or "\x00" in x or x in (".", "..") for x in ids):
+            raise ValueError(f"Expected a filename stem without path separators or NUL: {path}")
         if selected is not None and ids != selected:
             raise ValueError(f"Conflicting split lists: {paths[0]} and {path}; "
                              "keep one copy or make IDs and order identical")

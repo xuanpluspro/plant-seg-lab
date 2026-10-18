@@ -23,7 +23,7 @@ class Pipeline(unittest.TestCase):
             for folder in ("JPEGImages", "SegmentationClass", "ImageSets"):
                 (root / folder).mkdir(parents=True)
             for split in ("train", "val", "test"):
-                name = f"{split}_sample"
+                name = f"{split} sample (1)"
                 yy, xx = np.indices((512, 512))
                 mask = (((xx - 256)**2 + (yy - 256)**2) < 120**2).astype(np.uint8) * 255
                 image = np.full((512, 512, 3), 50, np.uint8)
@@ -71,13 +71,13 @@ class Pipeline(unittest.TestCase):
                 val.main()
             self.assertEqual(json.loads(metrics.read_text())["split"], "test")
             destination = Path(d)/"prediction"
-            with patch("sys.argv", ["predict.py", "--data-path", str(root/"JPEGImages/test_sample.jpg"),
+            with patch("sys.argv", ["predict.py", "--data-path", str(root/"JPEGImages/test sample (1).jpg"),
                                     "--weights", checkpoint, "--device", "cpu", "--output", str(destination)]):
                 predict.main()
-            result = np.array(Image.open(destination/"test_sample_mask.png"))
+            result = np.array(Image.open(destination/"test sample (1)_mask.png"))
             self.assertEqual(result.shape, (512,512))
             self.assertTrue(set(np.unique(result)).issubset({0,255}))
-            probability = np.load(destination/"test_sample_prob.npy")
+            probability = np.load(destination/"test sample (1)_prob.npy")
             self.assertTrue(np.isfinite(probability).all())
             self.assertTrue(((probability >= 0) & (probability <= 1)).all())
             import summarize
