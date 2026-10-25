@@ -1,10 +1,10 @@
 """VOC RGB datasets with binary/index masks and nested or flat split lists."""
 from pathlib import Path
-import random
 import numpy as np
 import torch
-from PIL import Image, ImageOps
+from PIL import Image
 from torch.utils.data import Dataset
+from .augmentation import augment_train
 
 IMAGE_SIZE = 512
 MEAN = (0.485, 0.456, 0.406)
@@ -136,13 +136,6 @@ class PlantVOCDataset(Dataset):
             raise ValueError(f"Expected 512x512 image AND mask: {image_path}, {mask_path}")
         label = Image.fromarray(mask)
         if self.augmentation:
-            if random.random() < 0.5:
-                image, label = ImageOps.mirror(image), ImageOps.mirror(label)
-            if random.random() < 0.5:
-                image, label = ImageOps.flip(image), ImageOps.flip(label)
-            turns = random.randrange(4)
-            if turns:
-                method = {1: Image.Transpose.ROTATE_90, 2: Image.Transpose.ROTATE_180,
-                          3: Image.Transpose.ROTATE_270}[turns]
-                image, label = image.transpose(method), label.transpose(method)
+            image, label = augment_train(image, label)
         return image_tensor(image), torch.from_numpy(np.array(label, dtype=np.int64)), self.ids[index]
+

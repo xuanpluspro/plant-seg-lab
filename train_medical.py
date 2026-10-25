@@ -10,6 +10,7 @@ from model import OSSSeg
 from model.losses import SegmentationLoss
 from utils.dataloader_medical import PlantVOCDataset, voc_root, validate_splits
 from utils.train_and_eval import train_one_epoch, evaluate
+from utils.augmentation import AUGMENTATION_CONFIG
 from utils.checkpoint_selection import SELECTION_METRIC, validation_score, resume_best_score
 from utils.runtime import (FORMAT, seed_everything, seed_worker, resolve_device,
                            save_checkpoint, read_checkpoint, rng_state, restore_rng)
@@ -109,6 +110,8 @@ def train(args):
                 or checkpoint["training_config"] != training_config
                 or checkpoint["splits"] != splits):
             raise ValueError("Resume requires identical model/training settings and split IDs, including total epochs")
+        if checkpoint.get("augmentation_config") != AUGMENTATION_CONFIG:
+            raise ValueError("Resume requires the same augmentation policy; start a new --output for the new augmentation settings")
         best = resume_best_score(checkpoint)
         model.load_state_dict(checkpoint["model"], strict=True)
         optimizer.load_state_dict(checkpoint["optimizer"])
@@ -119,7 +122,8 @@ def train(args):
         history = checkpoint["history"]
         initialization = checkpoint["initialization"]
     config = dict(model=model_config, training=training_config, initialization=initialization,
-                  data_path=str(root.resolve()), data=data_config, selection_metric=SELECTION_METRIC)
+                  data_path=str(root.resolve()), data=data_config, selection_metric=SELECTION_METRIC,
+                  augmentation_config=AUGMENTATION_CONFIG)
     (output / "config.json").write_text(json.dumps(config, indent=2), encoding="utf-8")
     (output / "splits.json").write_text(json.dumps(splits, indent=2), encoding="utf-8")
     print(f"device={device}; train={len(train_loader.dataset)} val={len(val_loader.dataset)}; params={sum(p.numel() for p in model.parameters()):,}", flush=True)
@@ -140,6 +144,7 @@ def train(args):
             format=FORMAT, model_config=model_config, training_config=training_config,
             initialization=initialization, splits=splits, data_config=data_config, epoch=epoch,
             selection_metric=selection_metric, best_score=best,
+            augmentation_config=AUGMENTATION_CONFIG,
             model=model.state_dict(), optimizer=optimizer.state_dict(),
             scheduler=scheduler.state_dict(), scaler=scaler.state_dict(),
             rng=rng_state(generator), history=history)
