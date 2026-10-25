@@ -6,6 +6,7 @@ from torch.utils.data import DataLoader
 from .dataloader_medical import PlantVOCDataset, validate_splits
 from .train_and_eval import evaluate
 from .benchmark import benchmark_model
+from .checkpoint_selection import checkpoint_selection_metric
 
 
 def write_results(result, output):
@@ -45,7 +46,7 @@ def export_final_results(model, checkpoint, checkpoint_path, root, output, devic
         raise ValueError('Final evaluation requires the same recorded train/val/test IDs')
     parameters = sum(p.numel() for p in model.parameters())
     result = dict(checkpoint=str(checkpoint_path), best_epoch=checkpoint['epoch'] + 1,
-                  selection_metric=('validation Foreground IoU' if checkpoint['model_config'].get('num_classes', 2) == 2 else 'validation Mean IoU'),
+                  selection_metric='validation ' + checkpoint_selection_metric(checkpoint),
                   parameters=parameters, params_m=parameters / 1e6,
                   model_config=checkpoint['model_config'], data_config=checkpoint.get('data_config', {}), metric_scale='0-1',
                   metric_units={'region_scores': '0-1', 'Boundary F1': '0-1', 'HD95': 'pixels', 'ASSD': 'pixels'},
@@ -80,3 +81,4 @@ def export_final_results(model, checkpoint, checkpoint_path, root, output, devic
     print(f'Final results saved: {Path(output) / "metrics.json"} and {Path(output) / "results.csv"}', flush=True)
     print(json.dumps(result, indent=2, allow_nan=False), flush=True)
     return result
+

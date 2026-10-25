@@ -77,7 +77,7 @@ python train_medical.py \
 
 ## 自动结果与评估口径
 
-训练/验证均有tqdm进度条，终端显示train/val loss、mIoU、Dice和耗时。二分类按验证集前景IoU、多分类按验证集mIoU保存best.pth；测试集不参与选模。结束后自动加载best.pth评估val与登记的test，保存：
+训练/验证均有tqdm进度条，终端显示train/val loss、mIoU、Dice和耗时。所有二分类和多分类任务统一按验证集mIoU（包含背景）保存best.pth；测试集不参与选模。结束后自动加载best.pth评估val与登记的test，保存：
 
 | 文件 | 内容 |
 |---|---|
@@ -206,3 +206,11 @@ python check_data.py \
 
 
 文件名可包含内部空格和括号：清单一整行`ARVALIS_ (1)`对应原图`JPEGImages/ARVALIS_ (1).png`（也支持其他已列出的图片扩展名）与掩码`SegmentationClass/ARVALIS_ (1).png`。不按空格拆字段，不要删除文件名中的空格；只忽略行首尾空白和空行。清单仍不写路径或扩展名，禁止路径分隔符、NUL和重复ID，跨划分泄漏检查保持不变。图片、掩码及原始清单均不会自动重命名。
+
+
+
+## 统一按验证集 mIoU 选模
+
+新实验的 best.pth 一律根据验证集 Mean IoU 最高值保存，前景 IoU 仍正常计算和导出。config.json 与检查点记录 selection_metric="Mean IoU"，最佳分数记录为 best_score。相同分数保留更早轮次。
+
+旧检查点评估仍按其原始选模规则标注，不会改写成按 mIoU 选模。旧二分类运行按前景 IoU 选择过最佳权重，不能直接 resume 到新规则：请使用相同骨干预训练权重和新输出目录重新训练。旧多分类运行本就使用 Mean IoU，可继续恢复。旧结果文件不会自动重算或覆盖。

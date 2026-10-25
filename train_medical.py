@@ -10,6 +10,7 @@ from model import OSSSeg
 from model.losses import SegmentationLoss
 from utils.dataloader_medical import PlantVOCDataset, voc_root, validate_splits
 from utils.train_and_eval import train_one_epoch, evaluate
+from utils.checkpoint_selection import SELECTION_METRIC, validation_score, resume_best_score
 from utils.runtime import (FORMAT, seed_everything, seed_worker, resolve_device,
                            save_checkpoint, read_checkpoint, rng_state, restore_rng)
 
@@ -108,17 +109,17 @@ def train(args):
                 or checkpoint["training_config"] != training_config
                 or checkpoint["splits"] != splits):
             raise ValueError("Resume requires identical model/training settings and split IDs, including total epochs")
+        best = resume_best_score(checkpoint)
         model.load_state_dict(checkpoint["model"], strict=True)
         optimizer.load_state_dict(checkpoint["optimizer"])
         scheduler.load_state_dict(checkpoint["scheduler"])
         scaler.load_state_dict(checkpoint["scaler"])
         restore_rng(checkpoint["rng"], generator)
         start = checkpoint["epoch"] + 1
-        best = checkpoint["best_foreground_iou"]
         history = checkpoint["history"]
         initialization = checkpoint["initialization"]
     config = dict(model=model_config, training=training_config, initialization=initialization,
-                  data_path=str(root.resolve()), data=data_config)
+                  data_path=str(root.resolve()), data=data_config, selection_metric=SELECTION_METRIC)
     (output / "config.json").write_text(json.dumps(config, indent=2), encoding="utf-8")
     (output / "splits.json").write_text(json.dumps(splits, indent=2), encoding="utf-8")
     print(f"device={device}; train={len(train_loader.dataset)} val={len(val_loader.dataset)}; params={sum(p.numel() for p in model.parameters()):,}", flush=True)
@@ -128,10 +129,8 @@ def train(args):
                                desc=f"Epoch {epoch+1}/{args.epochs} Train")
         metrics = evaluate(model, val_loader, device, criterion,
                            desc=f"Epoch {epoch+1}/{args.epochs} Val")
-        selection_metric = "Foreground IoU" if args.num_classes == 1 else "Mean IoU"
-        score = metrics[selection_metric]
-        if score is None:
-            raise ValueError("Undefined validation selection metric; no plant pixels in labels or predictions")
+        selection_metric = SELECTION_METRIC
+        score = validation_score(metrics)
         improved = score > best
         best = max(best, score)
         history.append(dict(epoch=epoch + 1, train_loss=loss, seconds=perf_counter()-begin,
@@ -139,7 +138,7 @@ def train(args):
         scheduler.step()
         checkpoint = dict(
             format=FORMAT, model_config=model_config, training_config=training_config,
-            initialization=initialization, splits=splits, data_config=data_config, epoch=epoch, best_foreground_iou=best,
+            initialization=initialization, splits=splits, data_config=data_config, epoch=epoch,
             selection_metric=selection_metric, best_score=best,
             model=model.state_dict(), optimizer=optimizer.state_dict(),
             scheduler=scheduler.state_dict(), scaler=scaler.state_dict(),
@@ -172,3 +171,4 @@ def train(args):
 
 if __name__ == "__main__":
     train(parse_args())
+
