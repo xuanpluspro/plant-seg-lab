@@ -8,7 +8,7 @@ class Surfaces(unittest.TestCase):
         a = np.zeros((16, 16), bool); a[4:8, 4:8] = True
         self.assertEqual(surface_scores(a, a), (0., 0., 1.))
         empty = np.zeros_like(a)
-        self.assertEqual(surface_scores(empty, empty), (0., 0., 1.))
+        self.assertIsNone(surface_scores(empty, empty))
         hd, assd, f1 = surface_scores(empty, a)
         self.assertAlmostEqual(hd, np.hypot(16, 16)); self.assertEqual(hd, assd)
         self.assertEqual(f1, 0.)
@@ -21,3 +21,4 @@ class Surfaces(unittest.TestCase):
 
 
 if __name__ == '__main__': unittest.main()
+

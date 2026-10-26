@@ -1,5 +1,4 @@
 """Final checkpoint evaluation and accuracy/complexity result exports."""
-import csv
 import json
 from pathlib import Path
 from torch.utils.data import DataLoader
@@ -7,36 +6,11 @@ from .dataloader_medical import PlantVOCDataset, validate_splits
 from .train_and_eval import evaluate
 from .benchmark import benchmark_model
 from .checkpoint_selection import checkpoint_selection_metric
+from segmentation_metrics import write_run_results
 
 
 def write_results(result, output):
-    output = Path(output)
-    output.mkdir(parents=True, exist_ok=True)
-    (output / 'metrics.json').write_text(json.dumps(result, indent=2, allow_nan=False), encoding='utf-8')
-    if result.get('benchmark') is not None:
-        (output / 'benchmark.json').write_text(json.dumps(result['benchmark'], indent=2, allow_nan=False), encoding='utf-8')
-    fields = ['split', 'best_epoch', 'Foreground IoU', 'Background IoU', 'Mean IoU',
-              'Dice', 'Precision', 'Recall', 'Pixel Accuracy', 'Mean Accuracy',
-              'Frequency Weighted IoU', 'Specificity', 'HD95', 'ASSD', 'Boundary F1', 'parameters', 'params_m', 'gflops',
-              'counted_gflops', 'flops_complete', 'latency_ms', 'fps', 'precision', 'gpu_name']
-    with (output / 'results.csv').open('w', newline='', encoding='utf-8-sig') as stream:
-        writer = csv.DictWriter(stream, fieldnames=fields)
-        writer.writeheader()
-        for split in ('val', 'test'):
-            if split not in result: continue
-            row = dict(split=split, best_epoch=result['best_epoch'],
-                       parameters=result['parameters'], params_m=result['params_m'])
-            row.update({k: v for k, v in result[split].items() if k in fields})
-            row.update({k: v for k, v in (result.get('benchmark') or {}).items() if k in fields})
-            writer.writerow(row)
-
-    with (output / 'class_metrics.csv').open('w', newline='', encoding='utf-8-sig') as stream:
-        fields = ['split', 'class_id', 'IoU', 'Accuracy', 'Dice', 'Precision', 'Recall', 'pixels']
-        writer = csv.DictWriter(stream, fieldnames=fields)
-        writer.writeheader()
-        for split in ('val', 'test'):
-            for row in result.get(split, {}).get('per_class', []):
-                writer.writerow(dict(split=split, **row))
+    write_run_results(result, output)
 
 
 def export_final_results(model, checkpoint, checkpoint_path, root, output, device,
@@ -46,6 +20,7 @@ def export_final_results(model, checkpoint, checkpoint_path, root, output, devic
         raise ValueError('Final evaluation requires the same recorded train/val/test IDs')
     parameters = sum(p.numel() for p in model.parameters())
     result = dict(checkpoint=str(checkpoint_path), best_epoch=checkpoint['epoch'] + 1,
+                  arch='BiMSeg', encoder='resnet50', seed=checkpoint.get('training_config', {}).get('seed'),
                   selection_metric='validation ' + checkpoint_selection_metric(checkpoint),
                   parameters=parameters, params_m=parameters / 1e6,
                   model_config=checkpoint['model_config'], data_config=checkpoint.get('data_config', {}), metric_scale='0-1',
@@ -81,4 +56,5 @@ def export_final_results(model, checkpoint, checkpoint_path, root, output, devic
     print(f'Final results saved: {Path(output) / "metrics.json"} and {Path(output) / "results.csv"}', flush=True)
     print(json.dumps(result, indent=2, allow_nan=False), flush=True)
     return result
+
 

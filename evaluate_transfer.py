@@ -58,6 +58,9 @@ def main():
     result = {
         "checkpoint": str(Path(args.weights).resolve()),
         "best_epoch": checkpoint["epoch"] + 1,
+        "arch": "BiMSeg",
+        "encoder": "resnet50",
+        "seed": checkpoint.get("training_config", {}).get("seed"),
         "evaluation_type": "independent target dataset; no fine-tuning",
         "evaluation_dataset": str(dataset.root.resolve()),
         "evaluation_split": args.split,
@@ -73,7 +76,7 @@ def main():
         "metric_units": {"region_scores": "0-1", "Boundary F1": "0-1",
                          "HD95": "pixels", "ASSD": "pixels"},
         "aggregation": {"region": "dataset confusion matrix",
-                        "boundary": "mean per image"},
+                        "boundary": "per-image foreground-class macro, then eligible-image mean"},
         "benchmark": None,
         args.split: metrics,
     }
@@ -86,3 +89,4 @@ def main():
 
 if __name__ == "__main__":
     main()
+

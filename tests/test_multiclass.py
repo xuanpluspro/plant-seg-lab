@@ -31,7 +31,8 @@ class MultiClass(unittest.TestCase):
         metric = SegmentationMetrics(5)
         metric.update(torch.nn.functional.one_hot(pred,5).permute(0,3,1,2).float(),target)
         result = metric.compute()
-        self.assertEqual(result['Foreground IoU'],1.)
+        self.assertEqual(result['Foreground IoU'],0.)
+        self.assertEqual(result['Union Foreground IoU'],1.)
         self.assertEqual(result['Mean IoU'],.2)
         self.assertEqual(result['Dice'],0.)
         self.assertEqual(len(result['per_class']),5)
@@ -84,3 +85,4 @@ class MultiClass(unittest.TestCase):
             probability = np.load(destination/'test_prob.npy')
             self.assertEqual(probability.shape,(5,512,512))
             np.testing.assert_allclose(probability.sum(0),1.,atol=1e-6)
+
