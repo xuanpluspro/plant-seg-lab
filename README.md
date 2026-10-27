@@ -252,3 +252,19 @@ python check_data.py \
 旧 JSON 中的兼容字段暂时保留，标准 CSV 只使用上表字段。`plant-seg-lab` 的 `Foreground IoU` 现在对应 `foreground_miou`，原合并值改称 `Union Foreground IoU`；`nclassbenchmark` 的旧 `mdice` 仍是含背景均值，论文推荐取标准 `dice`（等于 `mdice_fg`）。各仓库的损失函数、模型结构、数据增强和预训练设置不因这次指标统一而改变。
 
 旧权重可以重新评价，无需重新训练；旧 CSV 不会自动变为新口径。使用对应原始训练参数在两个 benchmark 仓库追加 `--eval-only`，或在 plant-seg-lab 使用 `summarize.py` / `evaluate_transfer.py` 重新生成结果。不要混合旧边界指标和 v2 指标。统计代码的验证命令：`python -m unittest discover -s tests -p 'test_metric_*.py' -v`（仅需 NumPy/SciPy，无需 GPU）。
+
+## 精简权重文件
+
+新训练的 `best.pth` 仅保留 FP32 模型权重及构建、评价所需元数据，不再保存优化器、调度器、AMP scaler、随机状态及历史列表。完整默认模型约 151 MiB（约 158 MB），具体随参数量变化。不会改变模型张量的精度或数值。
+
+`last.pth` 仍保留完整训练状态，用于断点恢复；不自动删除。训练历史另存在 history.csv/json。预测、评价继续使用 best.pth；恢复训练使用 last.pth。
+
+已有旧版大文件可另外导出精简版，不需要训练：
+
+```bash
+python slim_checkpoint.py \
+  --weights "你的实验目录/best.pth" \
+  --output "你的实验目录/best_inference.pth"
+```
+
+原文件不覆盖，输出必须是新文件。精简文件支持当前项目的预测与评价，不能用于完整断点恢复。更新代码不会自动缩小已有文件。
