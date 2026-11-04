@@ -99,6 +99,26 @@ def plot_rows(output, rows):
         fig.tight_layout(rect=(0, 0.06, 1, 1))
         for suffix in ('png', 'pdf', 'svg'):
             fig.savefig(output / f'loss_sensitivity.{suffix}', dpi=300)
+        # Separate panels use identical y limits, without panel letters or footnotes.
+        for ax, stem, title in zip(
+                axes, ['dice_weight_sensitivity', 'aux_weight_sensitivity'],
+                ['Dice weight (auxiliary = 0.2)', 'Auxiliary weight (Dice = 1)']):
+            single, panel = plt.subplots(figsize=(5, 4))
+            for line in ax.lines:
+                panel.plot(line.get_xdata(), line.get_ydata(),
+                           color=line.get_color(), marker=line.get_marker(),
+                           linestyle=line.get_linestyle(), label=line.get_label())
+            panel.set_xticks(ax.get_xticks())
+            panel.set_ylim(axes[0].get_ylim())
+            panel.set_xlabel(ax.get_xlabel())
+            panel.set_ylabel('Validation score (%)')
+            panel.set_title(title, fontsize=11)
+            panel.grid(alpha=0.25, linestyle='--')
+            panel.legend(fontsize=9)
+            single.tight_layout()
+            for suffix in ('png', 'pdf', 'svg'):
+                single.savefig(output / f'{stem}.{suffix}', dpi=300)
+            plt.close(single)
         plt.close(fig)
 
 

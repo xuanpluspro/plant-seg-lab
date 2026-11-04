@@ -310,3 +310,6 @@ python loss_sensitivity.py --output run/loss_sensitivity/voc201201_ep30_bs40 --c
 两项指标必须来自验证 mIoU 最佳的同一 epoch（并列取更早轮次）。mIoU 包含背景，Dice 为前景类别宏平均，图中明确区分；不分别挑选两项指标的最高值，不做平滑插值。部分完成时只输出已完成组汇总，九组齐全后才绘图。
 
 30 epoch 结果只代表相同训练预算下的敏感度，不能保证所有设置充分收敛；单种子不能证明统计稳定性。单因素分析不覆盖权重交互作用，也不能替代权重置零的损失消融。完成选参后，最终测试应按事先固定的训练协议独立进行。
+
+
+敏感度绘图同时输出独立面板 `dice_weight_sensitivity.png/.svg/.pdf` 和 `aux_weight_sensitivity.png/.svg/.pdf`，保留原组合图。独立图使用相同纵轴范围，不附带 (a)/(b) 编号或底部说明，方便在 LaTeX/PPT 自行排版。已有完整结果使用 `--collect-only` 重绘即可，无需重新训练。PNG 是栅格图，转为 SVG/PDF 不会恢复矢量；建议直接使用程序导出的原生 SVG/PDF。
