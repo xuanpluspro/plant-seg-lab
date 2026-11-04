@@ -44,6 +44,8 @@ def parse_args():
     p.add_argument("--benchmark", action=argparse.BooleanOptionalAction, default=True)
     p.add_argument("--benchmark-warmup", type=int, default=50)
     p.add_argument("--benchmark-iterations", type=int, default=200)
+    p.add_argument("--skip-final-evaluation", action="store_true",
+                   help="Keep epoch validation/checkpoints; skip final val/test export and benchmark")
     return p.parse_args()
 
 
@@ -164,7 +166,7 @@ def train(args):
         print(f"Epoch {epoch+1}/{args.epochs} | loss={loss:.4f} | val loss={metrics['Loss']:.4f} | val mIoU={metrics['Mean IoU']:.4f} "
               f"| Dice={metrics['Dice']:.4f} | best {selection_metric}={best:.4f} "
               f"| time={history[-1]['seconds']:.1f}s", flush=True)
-    if history:
+    if history and not getattr(args, "skip_final_evaluation", False):
         from utils.results import export_final_results
         best_checkpoint = read_checkpoint(output / "best.pth")
         model.load_state_dict(best_checkpoint["model"], strict=True)
@@ -180,4 +182,5 @@ def train(args):
 
 if __name__ == "__main__":
     train(parse_args())
+
 

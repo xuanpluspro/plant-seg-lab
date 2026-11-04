@@ -268,3 +268,45 @@ python slim_checkpoint.py \
 ```
 
 原文件不覆盖，输出必须是新文件。精简文件支持当前项目的预测与评价，不能用于完整断点恢复。更新代码不会自动缩小已有文件。
+
+
+## 损失权重敏感度分析（9 组）
+
+总损失为 `CE + dice_weight × DiceLoss + aux_weight × AuxiliaryBCE`，默认权重分别为 1 和 0.2。新增入口保持当前完整模型、数据增强和训练流程：
+
+- Dice 权重：0.25、0.5、1、1.5、2，辅助权重固定 0.2。
+- 辅助监督权重：0.05、0.1、0.2、0.3、0.4，Dice 权重固定 1。
+- 默认组合只运行一次，共 9 组；不是 25 组交叉搜索。默认每组 30 epoch，相同种子、预训练、batch、学习率及余弦调度，各组独立初始化，串行运行。
+
+```bash
+python -u loss_sensitivity.py \
+  --data-path data/VOC201201 --mask-encoding index --num-classes 1 \
+  --backbone-weights pretrained/unet_resnet_voc.pth \
+  --batch-size 40 --epochs 30 --workers 4 --device cuda --amp \
+  --output run/loss_sensitivity/voc201201_ep30_bs40
+```
+
+`--num-classes`不包含背景：GWFSS 用 3、RiceSeg 用 5。按实际数据和预训练文件修改路径。默认使用 resnet50.pth；比较实验必须使用相同预训练来源。训练仅允许 CUDA，不自动回退 CPU；显存不足自行降低 batch，整套实验保持一致。
+
+先加 `--dry-run` 可打印九条命令，不加载模型、不创建结果目录。中断后用完全相同命令加 `--resume`：完成组跳过，未完成组从 last.pth 恢复；无恢复权重的异常目录需先检查或换新实验根目录。续跑校验参数、划分 ID、预训练 SHA256 和 Python 源码；数据内容应在整套实验中保持不变。
+
+所有输出位于同一个实验根目录：
+
+| 文件/目录 | 内容 |
+|---|---|
+| sweep.json | 实验参数、划分、预训练及源码哈希 |
+| dice_*/ | 每组 config、splits、history、best.pth、last.pth；completed.json 标记完成 |
+| dice_*.log | 各组完整终端日志 |
+| summary.json、summary.csv | 每组最佳验证 mIoU 对应轮次、同轮 Dice；分数为 0–1 |
+| loss_sensitivity.png / .pdf / .svg | 两个子图，横轴分别为两种权重，纵轴统一百分数；mIoU 和 Dice 两条直线连点曲线 |
+
+每组仍逐 epoch 验证，但通过新增 `train_medical.py --skip-final-evaluation` 跳过训练后的额外 val/test 导出、测速和常规曲线绘制。敏感度分析只使用验证集，不自动评估测试集；普通训练不传此参数时保持原流程。此处不新增收敛性分析功能。
+
+```bash
+# 已完成实验重新汇总/绘图，不加载 torch 或模型，不进行训练与推理
+python loss_sensitivity.py --output run/loss_sensitivity/voc201201_ep30_bs40 --collect-only
+```
+
+两项指标必须来自验证 mIoU 最佳的同一 epoch（并列取更早轮次）。mIoU 包含背景，Dice 为前景类别宏平均，图中明确区分；不分别挑选两项指标的最高值，不做平滑插值。部分完成时只输出已完成组汇总，九组齐全后才绘图。
+
+30 epoch 结果只代表相同训练预算下的敏感度，不能保证所有设置充分收敛；单种子不能证明统计稳定性。单因素分析不覆盖权重交互作用，也不能替代权重置零的损失消融。完成选参后，最终测试应按事先固定的训练协议独立进行。
