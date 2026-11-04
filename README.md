@@ -313,3 +313,42 @@ python loss_sensitivity.py --output run/loss_sensitivity/voc201201_ep30_bs40 --c
 
 
 敏感度绘图同时输出独立面板 `dice_weight_sensitivity.png/.svg/.pdf` 和 `aux_weight_sensitivity.png/.svg/.pdf`，保留原组合图。独立图使用相同纵轴范围，不附带 (a)/(b) 编号或底部说明，方便在 LaTeX/PPT 自行排版。已有完整结果使用 `--collect-only` 重绘即可，无需重新训练。PNG 是栅格图，转为 SVG/PDF 不会恢复矢量；建议直接使用程序导出的原生 SVG/PDF。
+
+
+## 损失函数收敛性分析（单组，默认 80 epoch）
+
+新增 `train_convergence.py`，复用正常完整模型和训练代码，默认 Dice 权重 1、辅助 BCE 权重 0.2、AdamW 学习率 1e-4、余弦调度按完整 80 epoch 设置。默认 batch32、种子11，逐轮验证，严格要求 CUDA。不要把已完成的 50 epoch 实验修改总轮数后当作同一个 80 epoch 协议；请从相同骨干预训练开始新实验。
+
+```bash
+python -u train_convergence.py \
+  --data-path data/VOC201201 --mask-encoding index --num-classes 1 \
+  --backbone-weights pretrained/unet_resnet_voc.pth \
+  --batch-size 40 --epochs 80 --workers 4 --device cuda --amp \
+  --output run/convergence/voc201201_ep80_bs40
+```
+
+路径、batch、类别数按实际情况设置；`--num-classes` 不含背景。中断后使用相同参数和 output，将 `--backbone-weights ...` 替换为 `--resume 运行目录/last.pth`。恢复仍严格检查模型、训练参数、划分和增强协议；best.pth 依旧按验证 mIoU 选择，不能用于恢复优化器。
+
+所有新增训练逐轮记录以下分项到 history.json/history.csv 和 last.pth 的 history：`train_ce/dice/aux`、`val_ce/dice/aux` 为原始损失；对应 `train_weighted_*`、`val_weighted_*` 为乘以权重后的损失，CE 系数为1。训练与验证都按样本数加权求 epoch 平均，最后不足一个 batch 也按实际样本数计入。计算损失公式及优化器更新不变，记录值 detach，不保留计算图；返回标量的原损失接口仍可使用。
+
+收敛入口完成后，在同一个 output 目录生成：
+
+| 文件（均有 PNG、SVG、PDF） | 坐标及曲线 |
+|---|---|
+| convergence_loss | 横轴 Epoch，纵轴 Loss；训练总损失、验证总损失 |
+| convergence_metrics | 横轴 Epoch，纵轴验证分数 %；含背景 mIoU、前景宏平均 Dice |
+| convergence_combined | 上述两张图的并排组合，独立图不带 (a)/(b) 编号 |
+| convergence_components_train | 训练 CE、加权 Dice loss、加权辅助 BCE |
+| convergence_components_val | 验证 CE、加权 Dice loss、加权辅助 BCE |
+
+另有 `convergence.csv`，包含总损失、全部原始/加权分项、验证指标及本轮学习率。直接连接真实逐轮记录，不平滑、不挑最佳轮次代替过程。训练入口跳过最终额外 val/test 导出和测速，避免收敛分析自动使用测试集；已有普通训练与敏感度入口不自动生成这些新增收敛图。训练损失来自增强图像和训练模式，验证使用固定图像和评估模式，两者不要求大小排序一致。
+
+重绘无需 torch、模型、推理或训练：
+
+```bash
+python -m utils.plot_convergence --run run/convergence/voc201201_ep80_bs40
+```
+
+支持旧 history.json 的总损失和指标重绘；缺失分项保持 CSV 空白，只绘制实际存在的分项记录，不能从最终权重还原过去的分项。单次曲线仅展示本次训练的经验性稳定过程，不证明理论收敛、随机种子鲁棒性或比其他方法收敛更快；80 epoch 后是否稳定仍需根据结果判断。
+
+轻量检查（不训练、不运行网络）：`python -m unittest test_convergence -v`。

@@ -11,7 +11,7 @@ class SegmentationLoss(nn.Module):
             raise ValueError("Loss weights must be non-negative")
         self.dice_weight, self.aux_weight = dice_weight, aux_weight
 
-    def forward(self, output, target):
+    def forward(self, output, target, return_components=False):
         logits = output["logits"].float() if isinstance(output, dict) else output.float()
         if target.dtype != torch.long or target.min() < 0 or target.max() >= logits.shape[1]:
             raise ValueError("Loss expects class IDs 0..K-1 with background=0")
@@ -35,4 +35,12 @@ class SegmentationLoss(nn.Module):
                                       size=target.shape[-2:], mode="bilinear",
                                       align_corners=False)[:, 0]
             aux = F.binary_cross_entropy_with_logits(auxiliary, plant)
-        return ce + self.dice_weight * dice + self.aux_weight * aux
+        weighted_dice = self.dice_weight * dice
+        weighted_aux = self.aux_weight * aux
+        total = ce + weighted_dice + weighted_aux
+        if return_components:
+            return total, dict(ce=ce.detach(), dice=dice.detach(), aux=aux.detach(),
+                              weighted_ce=ce.detach(), weighted_dice=weighted_dice.detach(),
+                              weighted_aux=weighted_aux.detach())
+        return total
+

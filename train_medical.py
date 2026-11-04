@@ -17,7 +17,7 @@ from utils.runtime import (FORMAT, seed_everything, seed_worker, resolve_device,
                            save_checkpoint, read_checkpoint, rng_state, restore_rng)
 
 
-def parse_args():
+def parse_args(default_epochs=30, default_device="auto"):
     p = argparse.ArgumentParser(description=__doc__)
     p.add_argument("--data-path", default="VOCdevkit")
     p.add_argument("--output", default="run/train/ossseg")
@@ -31,7 +31,7 @@ def parse_args():
     p.add_argument("--width", type=int, default=256)
     p.add_argument("--freeze-backbone-bn", action=argparse.BooleanOptionalAction, default=False,
                    help="Freeze backbone BN running statistics (default: update during training)")
-    p.add_argument("--epochs", type=int, default=30)
+    p.add_argument("--epochs", type=int, default=default_epochs)
     p.add_argument("--batch-size", type=int, default=32)
     p.add_argument("--workers", type=int, default=0)
     p.add_argument("--lr", type=float, default=1e-4)
@@ -39,7 +39,7 @@ def parse_args():
     p.add_argument("--dice-weight", type=float, default=1.)
     p.add_argument("--aux-weight", type=float, default=0.2)
     p.add_argument("--seed", type=int, default=11)
-    p.add_argument("--device", default="auto")
+    p.add_argument("--device", default=default_device)
     p.add_argument("--amp", action=argparse.BooleanOptionalAction, default=True)
     p.add_argument("--benchmark", action=argparse.BooleanOptionalAction, default=True)
     p.add_argument("--benchmark-warmup", type=int, default=50)
@@ -135,16 +135,17 @@ def train(args):
     print(f"device={device}; train={len(train_loader.dataset)} val={len(val_loader.dataset)}; params={sum(p.numel() for p in model.parameters()):,}", flush=True)
     for epoch in range(start, args.epochs):
         begin = perf_counter()
-        loss = train_one_epoch(model, optimizer, train_loader, device, criterion, scaler,
-                               desc=f"Epoch {epoch+1}/{args.epochs} Train")
+        loss, loss_parts = train_one_epoch(model, optimizer, train_loader, device, criterion, scaler,
+                               desc=f"Epoch {epoch+1}/{args.epochs} Train", return_components=True)
         metrics = evaluate(model, val_loader, device, criterion,
-                           desc=f"Epoch {epoch+1}/{args.epochs} Val")
+                           desc=f"Epoch {epoch+1}/{args.epochs} Val", return_components=True)
         selection_metric = SELECTION_METRIC
         score = validation_score(metrics)
         improved = score > best
         best = max(best, score)
         history.append(dict(epoch=epoch + 1, train_loss=loss, seconds=perf_counter()-begin,
-                            lr=optimizer.param_groups[0]["lr"], **metrics))
+                            lr=optimizer.param_groups[0]["lr"],
+                            **{"train_" + key: value for key, value in loss_parts.items()}, **metrics))
         scheduler.step()
         checkpoint = dict(
             format=FORMAT, model_config=model_config, training_config=training_config,
@@ -179,8 +180,13 @@ def train(args):
         plot_training_curves([h["train_loss"] for h in history],
                              [h["Loss"] for h in history], history, str(output))
 
+    if history and getattr(args, "convergence", False):
+        from utils.plot_convergence import export_convergence
+        export_convergence(history, output)
+
 
 if __name__ == "__main__":
     train(parse_args())
+
 
 
